@@ -1,6 +1,8 @@
 import Phaser from 'phaser';
 import { Worker } from '../entities/Worker.js';
 import { TILE, EXTRUDE } from '../constants.js';
+import { flowLibrary } from '../flow/library.js';
+import { openAssignOverlay } from '../flow/assign.js';
 const MAP_W = 120;
 const MAP_H = 90;
 
@@ -350,23 +352,49 @@ export class MapScene extends Phaser.Scene {
   // ── units ─────────────────────────────────────────────────────────────────
 
   _spawnUnits() {
+    this.units = [];
     const cx = MAP_W / 2 | 0;
     const cy = MAP_H / 2 | 0;
     // three targets spaced 5 tiles apart — spiral outward from each until flat ground found
-    [cx - 5, cx, cx + 5].forEach(targetX => {
+    [cx - 5, cx, cx + 5].forEach((targetX, i) => {
       for (let r = 0; r <= 8; r++) {
         for (let dy = -r; dy <= r; dy++) {
           for (let dx = -r; dx <= r; dx++) {
             if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
             const tx = targetX + dx, ty = cy + dy;
             if (!this._isHill(tx, ty) && !this._isHill(tx, ty - 1)) {
-              new Worker(this, tx * TILE + TILE * 0.5, ty * TILE + TILE);
+              const worker = new Worker(this, tx * TILE + TILE * 0.5, ty * TILE + TILE);
+              this._registerUnit(worker, `Worker ${i + 1}`);
               return;
             }
           }
         }
       }
     });
+  }
+
+  // Make a Unit selectable and give it a Flow-name label above its sprite.
+  _registerUnit(unit, label) {
+    unit.label = label;
+    unit.assignedFlowId = null;
+    unit.sprite.setInteractive({ useHandCursor: true });
+    unit.sprite.setData('unit', unit);
+
+    unit.labelText = this.add.text(unit.x, unit.y - TILE - 6, '', {
+      fontFamily: 'system-ui, sans-serif',
+      fontSize: '13px',
+      color: '#ffffff',
+      backgroundColor: 'rgba(0,0,0,0.55)',
+      padding: { x: 5, y: 2 },
+    }).setOrigin(0.5, 1).setDepth(1e6);
+
+    this.units.push(unit);
+    this._refreshUnitLabel(unit);
+  }
+
+  _refreshUnitLabel(unit) {
+    const entry = unit.assignedFlowId ? flowLibrary.get(unit.assignedFlowId) : null;
+    unit.labelText.setText(entry ? entry.name : '');
   }
 
   // ── camera ────────────────────────────────────────────────────────────────
@@ -380,13 +408,20 @@ export class MapScene extends Phaser.Scene {
     );
 
     let drag = null;
+    // Tracked separately from `drag` so it survives pointerup (which clears `drag`) and is
+    // still readable when gameobjectup fires — order between the two isn't guaranteed.
+    this._dragMoved = false;
 
-    this.input.on('pointerdown', p => {
+    this.input.on('pointerdown', (p, over) => {
+      this._dragMoved = false;
+      // Clicking a Unit selects it (handled by gameobjectup) — don't start a camera drag.
+      if (over.length) return;
       drag = { ox: p.x, oy: p.y, sx: cam.scrollX, sy: cam.scrollY };
       this.game.canvas.style.cursor = 'grabbing';
     });
     this.input.on('pointermove', p => {
       if (!drag) return;
+      if (Math.abs(p.x - drag.ox) + Math.abs(p.y - drag.oy) > 3) this._dragMoved = true;
       cam.setScroll(drag.sx - (p.x - drag.ox), drag.sy - (p.y - drag.oy));
     });
     const endDrag = () => {
@@ -395,6 +430,13 @@ export class MapScene extends Phaser.Scene {
     };
     this.input.on('pointerup', endDrag);
     this.input.on('pointerupoutside', endDrag);
+
+    // Click a Unit → open the assign-flow overlay (ignore if it was a camera drag).
+    this.input.on('gameobjectup', (_p, obj) => {
+      if (this._dragMoved) return;
+      const unit = obj.getData && obj.getData('unit');
+      if (unit) openAssignOverlay(unit, flowLibrary, (u) => this._refreshUnitLabel(u));
+    });
 
     this.input.on('wheel', (_p, _objs, _dx, deltaY) => {
       cam.setZoom(Phaser.Math.Clamp(cam.zoom - deltaY * 0.001, 0.25, 2));
