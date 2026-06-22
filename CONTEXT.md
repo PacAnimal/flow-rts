@@ -101,7 +101,8 @@ A property of a Tile that a Unit may stand on or move to: lowland ground and ram
 Hill (plateau) Tiles are not Walkable. Walkability is terrain-type passability of a single
 Tile, distinct from reachability — whether a Unit can actually get to a Tile, which depends
 on a Path of Walkable Tiles connecting them. A Move destination must be Walkable, and is
-carried out only if it is also reachable.
+carried out only if it is also reachable. Separately, a Tile occupied by a Deposit is blocked
+even where the terrain is Walkable — a Unit can neither stand on nor path through it.
 _Avoid_: passable, traversable
 
 **Path**:
@@ -111,3 +112,25 @@ Walkable Tiles that goes around unwalkable terrain. A Path is found when the Mov
 Units are not part of a Path — they are avoided locally, moment to moment, as a Unit travels
 along it, so two Units sharing a destination settle near it rather than stacking on one Tile.
 _Avoid_: route, trail, track, waypoints (a Path is made of waypoints)
+
+**Resource**:
+A type of gatherable material that Workers collect — Crystals today; more (e.g. Gas, Wood)
+later. A Worker that gathers comes to hold an amount of a Resource. The Resource is the
+*what* (the kind of material); a Deposit is the *where* (a source of it on the map).
+_Avoid_: material, mineral, item, loot, goods
+
+**Deposit**:
+A gatherable source of a Resource occupying a single Tile on the map; what a Worker gathers
+from. A crystal cluster on the map is several Deposits on neighbouring Tiles (one Deposit per
+Tile). A Deposit blocks its Tile — no Unit can stand on or path through it — so a Worker
+gathers while standing on an adjacent Tile, i.e. *beside* the Deposit. A Deposit holds a
+finite amount of its Resource and is removed (its Tile freed) once gathered empty.
+_Avoid_: resource node (Node is reserved), patch, source, vein
+
+**Cargo**:
+The Resource amount a Unit is currently carrying — a single {Resource, amount} slot (a Unit
+carries one Resource type at a time), bounded by the Unit's carry capacity. Capacity defaults
+to one gather's worth (10 Crystals today) and may be raised later by upgrades. Gathering adds
+its yield up to that capacity; a Worker already full does not gather. There is no base or
+drop-off yet, so Cargo only fills — nothing empties it.
+_Avoid_: inventory, load, payload, stockpile, hold

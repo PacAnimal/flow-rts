@@ -1,11 +1,12 @@
 import Phaser from 'phaser';
 import { Worker } from '../entities/Worker.js';
-import { TILE, EXTRUDE } from '../constants.js';
+import { TILE, EXTRUDE, UNIT_CARRY_CAPACITY } from '../constants.js';
 import { flowLibrary } from '../flow/library.js';
 import { openAssignOverlay } from '../flow/assign.js';
 import { registerPositionPicker } from '../flow/positionPicker.js';
 import { startRun, tickRun } from '../flow/runtime.js';
 import { MovementSystem } from '../movement.js';
+import { getResource } from '../resources.js';
 import '../flow/editor.css'; // shared overlay chrome — styles the Start/Pause button
 const MAP_W = 120;
 const MAP_H = 90;
@@ -50,6 +51,11 @@ export class MapScene extends Phaser.Scene {
     // (docs/adr/0005). Set before spawning Units so their Runs don't begin at assignment.
     this._running = false;
 
+    // Deposits on the map (docs/adr/0008): a list plus a Tile→Deposit lookup that walkable()
+    // and adjacency consult. Initialised before terrain/crystals/Units populate it.
+    this._deposits = [];
+    this._depositByTile = new Map(); // `${tx},${ty}` → Deposit
+
     this._makeTileset();
     const { tiles, isHill, isRamp } = this._generateTerrain();
     this._isHill = isHill;
@@ -81,6 +87,8 @@ export class MapScene extends Phaser.Scene {
       },
       position: (unit) => ({ x: unit.x, y: unit.y }),
       walkable: (tx, ty) => this.walkable(tx, ty),
+      adjacentDeposit: (unit) => this._adjacentDeposit(unit),
+      collect: (unit, deposit) => this._collect(unit, deposit),
     };
 
     this._buildStartButton();
@@ -102,10 +110,11 @@ export class MapScene extends Phaser.Scene {
     for (const unit of this.units) this._placeUnit(unit);
   }
 
-  // A Tile is Walkable if it is lowland ground or a ramp; hill (plateau) tops are not.
-  // Terrain-type passability only — no pathfinding (see CONTEXT.md / ADR-0004).
+  // A Tile is Walkable if it is lowland ground or a ramp (hill tops are not) AND no Deposit
+  // occupies it — a Deposit blocks its Tile, so Units path around it (CONTEXT.md / ADR-0008).
   walkable(tx, ty) {
     if (tx < 0 || tx >= MAP_W || ty < 0 || ty >= MAP_H) return false;
+    if (this._depositByTile.has(`${tx},${ty}`)) return false;
     return !(this._isHill(tx, ty) && !this._isRamp(tx, ty));
   }
 
@@ -404,6 +413,8 @@ export class MapScene extends Phaser.Scene {
 
         // flat grass only — no cliffs, shadows, hills, or ramps
         if (isHill(tx, ty) || isRamp(tx, ty) || isHill(tx, ty - 1)) continue;
+        // one Deposit (and one sprite) per Tile (docs/adr/0008)
+        if (this._depositByTile.has(`${tx},${ty}`)) continue;
 
         const wx  = tx * TILE + TILE * 0.5 + ((r() * 16 - 8) | 0);
         const wy  = ty * TILE + TILE * 0.7  + ((r() * 10 - 5) | 0);
@@ -411,8 +422,72 @@ export class MapScene extends Phaser.Scene {
         img.setOrigin(0.5, 1);
         img.setScale(TILE * (0.8 + r() * 0.5) / 1024);
         img.setDepth(wy);
+
+        this._addDeposit('crystals', tx, ty, img);
       }
     }
+  }
+
+  // ── deposits & gathering (docs/adr/0008) ────────────────────────────────────
+
+  _addDeposit(type, tx, ty, sprite) {
+    const def = getResource(type);
+    const deposit = { type, tx, ty, amount: def ? def.depositAmount : 0, sprite };
+    this._deposits.push(deposit);
+    this._depositByTile.set(`${tx},${ty}`, deposit);
+    return deposit;
+  }
+
+  // The Tile a Unit currently stands on (feet at the Tile's bottom-centre — matches movement.js).
+  _unitTile(unit) {
+    return { x: Math.floor(unit.x / TILE), y: Math.floor((unit.y - TILE * 0.5) / TILE) };
+  }
+
+  // World primitive: the nearest Deposit on a Tile 8-adjacent to the Unit, or null. Returns an
+  // opaque handle plus its gather time so the interpreter can time the gather (docs/adr/0008).
+  _adjacentDeposit(unit) {
+    const { x: ux, y: uy } = this._unitTile(unit);
+    let best = null, bestD = Infinity;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue;
+        const dep = this._depositByTile.get(`${ux + dx},${uy + dy}`);
+        if (!dep) continue;
+        const d = dx * dx + dy * dy;
+        if (d < bestD) { best = dep; bestD = d; }
+      }
+    }
+    if (!best) return null;
+    // Full for this Resource ⇒ nothing to gather: the Worker no-ops rather than standing idle.
+    if (this._cargoRoom(unit, best.type) <= 0) return null;
+    const def = getResource(best.type);
+    return { handle: best, gatherTime: def ? def.gatherTime : 0 };
+  }
+
+  // How much more of `type` this Unit can carry, given its Cargo (single slot) and capacity.
+  _cargoRoom(unit, type) {
+    const held = unit.cargo && unit.cargo.type === type ? unit.cargo.amount : 0;
+    return (unit.carryCapacity ?? UNIT_CARRY_CAPACITY) - held;
+  }
+
+  // World primitive: take one yield from the Deposit into the Unit's Cargo, deplete it, and
+  // remove the Deposit (freeing its Tile) once empty.
+  _collect(unit, deposit) {
+    const def = getResource(deposit.type);
+    if (!def || deposit.amount <= 0) return;
+    const got = Math.min(def.yield, deposit.amount, this._cargoRoom(unit, deposit.type));
+    if (got <= 0) return; // Cargo full
+    deposit.amount -= got;
+    if (unit.cargo && unit.cargo.type === deposit.type) unit.cargo.amount += got;
+    else unit.cargo = { type: deposit.type, amount: got };
+    if (deposit.amount <= 0) this._removeDeposit(deposit);
+    this._refreshUnitLabel(unit);
+  }
+
+  _removeDeposit(deposit) {
+    deposit.sprite.destroy();
+    this._depositByTile.delete(`${deposit.tx},${deposit.ty}`);
+    this._deposits = this._deposits.filter((d) => d !== deposit);
   }
 
   // ── units ─────────────────────────────────────────────────────────────────
@@ -429,7 +504,7 @@ export class MapScene extends Phaser.Scene {
           for (let dx = -r; dx <= r; dx++) {
             if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
             const tx = targetX + dx, ty = cy + dy;
-            if (!this._isHill(tx, ty) && !this._isHill(tx, ty - 1)) {
+            if (this.walkable(tx, ty) && !this._isHill(tx, ty - 1)) {
               const worker = new Worker(this, tx * TILE + TILE * 0.5, ty * TILE + TILE);
               this._registerUnit(worker, `Worker ${i + 1}`);
               return;
@@ -443,6 +518,7 @@ export class MapScene extends Phaser.Scene {
   // Make a Unit selectable and give it a Flow-name label above its sprite.
   _registerUnit(unit, label) {
     unit.label = label;
+    unit.carryCapacity = UNIT_CARRY_CAPACITY; // per-Unit Cargo limit (upgradeable later)
     // Restore a persisted assignment, but only if that Flow still exists in the Library.
     const savedId = this._assignments[label];
     unit.assignedFlowId = savedId && flowLibrary.get(savedId) ? savedId : null;
@@ -462,9 +538,17 @@ export class MapScene extends Phaser.Scene {
     this._startRun(unit);
   }
 
+  // Label above a Unit: its Flow name plus a Cargo readout (e.g. "Worker 1  ·  ◆20") so
+  // gathering is observable until there's a real animation/HUD (docs/adr/0008).
   _refreshUnitLabel(unit) {
     const entry = unit.assignedFlowId ? flowLibrary.get(unit.assignedFlowId) : null;
-    unit.labelText.setText(entry ? entry.name : '');
+    const parts = [];
+    if (entry) parts.push(entry.name);
+    if (unit.cargo) {
+      const def = getResource(unit.cargo.type);
+      parts.push(`${def ? def.glyph : ''}${unit.cargo.amount}`);
+    }
+    unit.labelText.setText(parts.join('  ·  '));
   }
 
   // (Re)start a Unit's Run from its assigned Flow's OnStart. Called when a Unit is registered

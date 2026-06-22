@@ -28,6 +28,19 @@ const EXECUTORS = {
     return world.moveToward(runner, dest, dt) ? done() : RUNNING;
   },
 
+  // Gather from the Deposit beside the Worker (docs/adr/0008). On the first tick, ask the world
+  // for an adjacent Deposit (an opaque handle + its gather time); none ⇒ no-op, advance. Then
+  // hold the cursor for that gather time and, once elapsed, have the world collect into Cargo.
+  // Timing uses the per-node scratch state, so re-assigning mid-gather resets cleanly.
+  Gather: (node, runner, world, dt, state) => {
+    if (state.found === undefined) state.found = world.adjacentDeposit(runner); // find once
+    if (!state.found) return done(); // nothing beside it
+    state.elapsed = (state.elapsed || 0) + dt;
+    if (state.elapsed < state.found.gatherTime * 1000) return RUNNING;
+    world.collect(runner, state.found.handle);
+    return done();
+  },
+
   // Hold the cursor for `duration` seconds, accumulating elapsed time in the node's scratch
   // state. Unset or non-positive duration is a no-op (ADR-0004) — advance immediately.
   Wait: (node, runner, world, dt, state) => {

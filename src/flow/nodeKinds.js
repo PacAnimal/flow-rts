@@ -33,6 +33,19 @@ export const NODE_KINDS = {
     ],
   },
 
+  Gather: {
+    kind: 'Gather',
+    category: 'action',
+    title: 'Gather Resources',
+    // Beside a Deposit, the Worker stands for the Resource's gather time, then takes its yield
+    // into Cargo (docs/adr/0008). No Parameters — it gathers from whatever adjacent Deposit it
+    // finds; if none is adjacent it is a no-op. Chainable like any Action.
+    ports: [
+      { id: 'in', dir: 'in', type: 'exec', label: '' },
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+  },
+
   Wait: {
     kind: 'Wait',
     category: 'control',
