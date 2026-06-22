@@ -1,9 +1,10 @@
 import Phaser from 'phaser';
 import { Worker } from '../entities/Worker.js';
-import { TILE, EXTRUDE } from '../constants.js';
+import { TILE, EXTRUDE, UNIT_SPEED } from '../constants.js';
 import { flowLibrary } from '../flow/library.js';
 import { openAssignOverlay } from '../flow/assign.js';
 import { registerPositionPicker } from '../flow/positionPicker.js';
+import { startRun, tickRun } from '../flow/runtime.js';
 const MAP_W = 120;
 const MAP_H = 90;
 
@@ -54,6 +55,29 @@ export class MapScene extends Phaser.Scene {
     this._setupCamera();
     this.input.mouse?.disableContextMenu(); // allow right-click as a cancel gesture
     registerPositionPicker((opts) => this._beginPositionPick(opts));
+
+    // The world context handed to the Flow interpreter: the only surface through which a
+    // node's effect reaches the game (docs/adr/0006). The interpreter has no Phaser; these
+    // primitives do. Grows deliberately as new Actions are added.
+    this._world = {
+      moveToward: (unit, destTile, dt) => this._moveToward(unit, destTile, dt),
+      position: (unit) => ({ x: unit.x, y: unit.y }),
+      walkable: (tx, ty) => this.walkable(tx, ty),
+    };
+  }
+
+  // Drive every Unit's Run one frame. Flows are always live (docs/adr/0005): a Unit with a
+  // running Run advances its cursor through the LIVE Flow definition. A vanished Flow (its
+  // Library entry removed) halts the Run.
+  update(_time, delta) {
+    if (!this.units) return;
+    for (const unit of this.units) {
+      const run = unit.run;
+      if (!run || run.status !== 'running') continue;
+      const entry = flowLibrary.get(run.flowId);
+      if (!entry) { run.status = 'halted'; continue; }
+      tickRun(run, unit, entry.model, this._world, delta);
+    }
   }
 
   // A Tile is Walkable if it is lowland ground or a ramp; hill (plateau) tops are not.
@@ -413,11 +437,48 @@ export class MapScene extends Phaser.Scene {
 
     this.units.push(unit);
     this._refreshUnitLabel(unit);
+    this._startRun(unit);
   }
 
   _refreshUnitLabel(unit) {
     const entry = unit.assignedFlowId ? flowLibrary.get(unit.assignedFlowId) : null;
     unit.labelText.setText(entry ? entry.name : '');
+  }
+
+  // (Re)start a Unit's Run from its assigned Flow's OnStart. Called when a Unit is registered
+  // and whenever its Assignment changes — always-live, so a fresh assignment runs at once and
+  // re-assigning discards the old Run (docs/adr/0005). No Flow assigned → no Run (idle).
+  _startRun(unit) {
+    const entry = unit.assignedFlowId ? flowLibrary.get(unit.assignedFlowId) : null;
+    unit.run = entry ? startRun(entry.id, entry.model) : null;
+  }
+
+  // Sync a Unit's sprite + label to its logical {x,y} (feet position), keeping depth = y so
+  // it sorts correctly against trees/crystals/other Units.
+  _placeUnit(unit) {
+    unit.sprite.setPosition(unit.x, unit.y);
+    unit.sprite.setDepth(unit.y);
+    unit.labelText.setPosition(unit.x, unit.y - TILE - 6);
+  }
+
+  // World-context primitive: step `unit` toward the destination Tile's center at UNIT_SPEED.
+  // Straight-line, terrain ignored in transit (no pathfinding — CONTEXT.md). Returns true on
+  // arrival. The Tile's feet point matches where Units spawn (bottom-center of the tile).
+  _moveToward(unit, destTile, dt) {
+    const tx = destTile.x * TILE + TILE * 0.5;
+    const ty = destTile.y * TILE + TILE;
+    const dx = tx - unit.x, dy = ty - unit.y;
+    const dist = Math.hypot(dx, dy);
+    const step = UNIT_SPEED * TILE * (dt / 1000);
+    if (dist <= step || dist === 0) {
+      unit.x = tx; unit.y = ty;
+      this._placeUnit(unit);
+      return true;
+    }
+    unit.x += (dx / dist) * step;
+    unit.y += (dy / dist) * step;
+    this._placeUnit(unit);
+    return false;
   }
 
   // ── assignment persistence ─────────────────────────────────────────────────
@@ -486,6 +547,7 @@ export class MapScene extends Phaser.Scene {
       if (unit) openAssignOverlay(unit, flowLibrary, (u) => {
         this._refreshUnitLabel(u);
         this._saveAssignments();
+        this._startRun(u); // always-live: new Assignment runs at once; re-assign restarts
       });
     });
 

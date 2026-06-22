@@ -27,6 +27,15 @@ The link between a Unit and the single Flow it currently runs. Created when a Fl
 assigned to a Unit; replaced (not stacked) when another Flow is assigned.
 _Avoid_: binding, attachment
 
+**Run**:
+A Unit's live execution of its assigned Flow — the *instance* to the Flow's *definition*.
+A Run holds where the Unit currently is within the Flow and is one of: running (working
+through the Flow), idle (no Flow, or the Flow finished), or halted (its current Node was
+removed by an edit). Distinct from the Assignment (which Flow) and the Flow (the shared
+definition): assigning a Flow starts a fresh Run; re-assigning discards the old one. A Run
+is per-Unit and momentary — it is not saved, so reloading restarts every Run from scratch.
+_Avoid_: process, thread, session, instance
+
 **Node**:
 A single box in a Flow. Every node has a kind: Event, Action, or Flow Control.
 _Avoid_: block, box, step
