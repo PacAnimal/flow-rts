@@ -9,4 +9,8 @@ new Phaser.Game({
     mode: Phaser.Scale.RESIZE,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
+  render: {
+    antialias: false,
+    roundPixels: true,
+  },
 });
