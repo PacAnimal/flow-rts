@@ -98,6 +98,16 @@ _Avoid_: cell, square, grid square
 
 **Walkable**:
 A property of a Tile that a Unit may stand on or move to: lowland ground and ramp Tiles.
-Hill (plateau) Tiles are not Walkable. This is terrain-type passability, not reachability
-(there is no pathfinding yet). A destination must be a Walkable Tile.
-_Avoid_: passable, traversable, reachable
+Hill (plateau) Tiles are not Walkable. Walkability is terrain-type passability of a single
+Tile, distinct from reachability — whether a Unit can actually get to a Tile, which depends
+on a Path of Walkable Tiles connecting them. A Move destination must be Walkable, and is
+carried out only if it is also reachable.
+_Avoid_: passable, traversable
+
+**Path**:
+The route a Unit follows to reach its Move destination: a sequence of waypoints over
+Walkable Tiles that goes around unwalkable terrain. A Path is found when the Move begins
+(terrain is fixed) and then followed; if none exists, the destination is unreachable. Other
+Units are not part of a Path — they are avoided locally, moment to moment, as a Unit travels
+along it, so two Units sharing a destination settle near it rather than stacking on one Tile.
+_Avoid_: route, trail, track, waypoints (a Path is made of waypoints)

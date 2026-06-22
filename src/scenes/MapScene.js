@@ -1,10 +1,11 @@
 import Phaser from 'phaser';
 import { Worker } from '../entities/Worker.js';
-import { TILE, EXTRUDE, UNIT_SPEED } from '../constants.js';
+import { TILE, EXTRUDE } from '../constants.js';
 import { flowLibrary } from '../flow/library.js';
 import { openAssignOverlay } from '../flow/assign.js';
 import { registerPositionPicker } from '../flow/positionPicker.js';
 import { startRun, tickRun } from '../flow/runtime.js';
+import { MovementSystem } from '../movement.js';
 const MAP_W = 120;
 const MAP_H = 90;
 
@@ -56,19 +57,30 @@ export class MapScene extends Phaser.Scene {
     this.input.mouse?.disableContextMenu(); // allow right-click as a cancel gesture
     registerPositionPicker((opts) => this._beginPositionPick(opts));
 
+    // The static-terrain + dynamic-steering movement layer (docs/adr/0007). Owns Unit Paths
+    // and avoidance; the interpreter reaches it only through the world context below.
+    this._movement = new MovementSystem({
+      isWalkable: (tx, ty) => this.walkable(tx, ty),
+      width: MAP_W,
+      height: MAP_H,
+    });
+
     // The world context handed to the Flow interpreter: the only surface through which a
     // node's effect reaches the game (docs/adr/0006). The interpreter has no Phaser; these
-    // primitives do. Grows deliberately as new Actions are added.
+    // primitives do. Move sets a goal and reads whether the Unit has arrived; the actual
+    // pathing/steering runs in update()'s movement pass.
     this._world = {
-      moveToward: (unit, destTile, dt) => this._moveToward(unit, destTile, dt),
+      moveToward: (unit, destTile) => {
+        this._movement.setGoal(unit, destTile.x, destTile.y);
+        return this._movement.arrived(unit);
+      },
       position: (unit) => ({ x: unit.x, y: unit.y }),
       walkable: (tx, ty) => this.walkable(tx, ty),
     };
   }
 
-  // Drive every Unit's Run one frame. Flows are always live (docs/adr/0005): a Unit with a
-  // running Run advances its cursor through the LIVE Flow definition. A vanished Flow (its
-  // Library entry removed) halts the Run.
+  // Per-frame loop (docs/adr/0005, 0007): tick every Run (a running Move sets its goal), then
+  // integrate movement for all Units at once (so idle Units also get shoved), then sync sprites.
   update(_time, delta) {
     if (!this.units) return;
     for (const unit of this.units) {
@@ -78,6 +90,8 @@ export class MapScene extends Phaser.Scene {
       if (!entry) { run.status = 'halted'; continue; }
       tickRun(run, unit, entry.model, this._world, delta);
     }
+    this._movement.update(this.units, delta);
+    for (const unit of this.units) this._placeUnit(unit);
   }
 
   // A Tile is Walkable if it is lowland ground or a ramp; hill (plateau) tops are not.
@@ -459,26 +473,6 @@ export class MapScene extends Phaser.Scene {
     unit.sprite.setPosition(unit.x, unit.y);
     unit.sprite.setDepth(unit.y);
     unit.labelText.setPosition(unit.x, unit.y - TILE - 6);
-  }
-
-  // World-context primitive: step `unit` toward the destination Tile's center at UNIT_SPEED.
-  // Straight-line, terrain ignored in transit (no pathfinding — CONTEXT.md). Returns true on
-  // arrival. The Tile's feet point matches where Units spawn (bottom-center of the tile).
-  _moveToward(unit, destTile, dt) {
-    const tx = destTile.x * TILE + TILE * 0.5;
-    const ty = destTile.y * TILE + TILE;
-    const dx = tx - unit.x, dy = ty - unit.y;
-    const dist = Math.hypot(dx, dy);
-    const step = UNIT_SPEED * TILE * (dt / 1000);
-    if (dist <= step || dist === 0) {
-      unit.x = tx; unit.y = ty;
-      this._placeUnit(unit);
-      return true;
-    }
-    unit.x += (dx / dist) * step;
-    unit.y += (dy / dist) * step;
-    this._placeUnit(unit);
-    return false;
   }
 
   // ── assignment persistence ─────────────────────────────────────────────────
