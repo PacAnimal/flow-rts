@@ -32,13 +32,18 @@ export class FlowEditor {
 
   show() {
     this.visible = true;
+    // Become visible BEFORE rendering: wire endpoints are measured with
+    // getBoundingClientRect, which returns zeros while the editor is display:none —
+    // that left restored Connections drawn as degenerate (0,0)→(0,0) paths after reload.
+    this._applyVisibility();
     // Ensure there's a Flow to edit.
     if (!this.library.list().length) { this.library.create(); this.library.save(); }
     if (!this.currentId || !this.library.get(this.currentId)) {
       this.setFlow(this.library.list()[0].id);
+    } else {
+      this._renderWires(); // re-measure in case the last render happened while hidden
     }
     this._renderLibrary();
-    this._applyVisibility();
   }
 
   hide() { this.visible = false; this._applyVisibility(); }
