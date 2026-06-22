@@ -41,6 +41,14 @@ const EXECUTORS = {
     return done();
   },
 
+  // Deliver Cargo to the player's Stockpile if the Worker is beside a Command Center (docs/adr/
+  // 0008). Instant: the world transfers and empties Cargo (a no-op when not adjacent or empty),
+  // then the cursor advances.
+  Deliver: (node, runner, world) => {
+    world.deliver(runner);
+    return done();
+  },
+
   // Hold the cursor for `duration` seconds, accumulating elapsed time in the node's scratch
   // state. Unset or non-positive duration is a no-op (ADR-0004) — advance immediately.
   Wait: (node, runner, world, dt, state) => {

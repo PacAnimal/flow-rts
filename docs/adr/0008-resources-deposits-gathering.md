@@ -68,5 +68,17 @@ world side; the runtime only knows "how long to wait" and "do the collect."
 - A no-animation stub marks where the gather animation will go; a minimal Cargo readout is
   appended to the Unit label so gathering is observable.
 - New pure data module `resources.js`; new world primitives; `Gather` node kind (Action).
-- Deferred: capacity upgrades, base/drop-off and a player-wide Resource tally, mixed-type Cargo,
-  gather animation, and depletion-driven repathing niceties.
+- Deferred: capacity upgrades, mixed-type Cargo, gather animation, and depletion-driven
+  repathing niceties.
+
+## Amendment: delivery and the player Stockpile
+
+The deferred drop-off and player-wide tally now exist. A **Deliver Resources** Action node, the
+mirror of Gather, hands a Worker's Cargo to the player's **Stockpile** (Resource id → amount,
+shown in a top-left materials panel) when the Worker is beside a Command Center, emptying the
+Cargo; it is a no-op otherwise. Delivery is instant (unlike the timed gather) — the pacing of
+the gather→deliver loop comes from gather time plus travel. It follows the same seam as Gather:
+the executor stays resource-agnostic and calls one world primitive, `deliver(runner)`, with the
+Stockpile and Command-Center adjacency owned by the world. The Command Center registers as a
+blocking Building in the occupancy layer (ADR-0009), so "beside it" is a Tile on its footprint
+ring. Still deferred: spending the Stockpile, and a richer drop-off than the starting building.
