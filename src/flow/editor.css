@@ -128,6 +128,7 @@
 /* Category accents */
 .category-event { border-left-color: #e0a23c; }
 .category-action { border-left-color: #3a7bd5; }
+.category-control { border-left-color: #9b6cd5; }
 
 /* Canvas */
 .flow-canvas {
@@ -178,6 +179,7 @@
 }
 .flow-node.category-event { border-top-color: #e0a23c; }
 .flow-node.category-action { border-top-color: #3a7bd5; }
+.flow-node.category-control { border-top-color: #9b6cd5; }
 .flow-node.dragging { box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55); z-index: 5; }
 
 .node-header {
@@ -244,6 +246,18 @@
 }
 .param-pick:hover { background: #34505c; }
 .param-pick.set { color: #d7f0dd; background: #2f5740; border-color: #4e8a63; }
+
+.param-input {
+  width: 64px;
+  font: 600 11px/1 system-ui, sans-serif;
+  color: #cdd9e0;
+  background: #2b3a44;
+  border: 1px solid #45606e;
+  border-radius: 5px;
+  padding: 5px 8px;
+  text-align: right;
+}
+.param-input:focus { outline: none; border-color: #5b97e8; background: #314350; }
 
 /* Position-pick mode banner (shown while picking a Tile on the map) */
 .pick-banner {

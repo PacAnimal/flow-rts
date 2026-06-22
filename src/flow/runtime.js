@@ -6,9 +6,9 @@
 // A Run is `{ flowId, current, status }`: `current` is the id of the node the cursor sits on
 // and `status` is 'running' | 'idle' | 'halted'. The cursor reads the LIVE model each tick,
 // so edits to the shared Flow definition take effect as the Unit advances; if the current
-// node is deleted, the Run halts. Runs hold no per-node state today (Move is stateless — it
-// glides from wherever the Unit currently is), but `tickRun` passes a `runner` so executors
-// can keep some later if needed.
+// node is deleted, the Run halts. A Run carries a scratch `state` object for the node the
+// cursor currently sits on (reset each time it advances) — Move is stateless and ignores it,
+// but Wait accumulates elapsed time there.
 
 // Each executor runs one node and reports back: either still RUNNING (wait for next frame,
 // keep the cursor here) or DONE with the Exec output port to follow. Keyed by node kind so
@@ -27,6 +27,15 @@ const EXECUTORS = {
     if (!dest) return done();
     return world.moveToward(runner, dest, dt) ? done() : RUNNING;
   },
+
+  // Hold the cursor for `duration` seconds, accumulating elapsed time in the node's scratch
+  // state. Unset or non-positive duration is a no-op (ADR-0004) — advance immediately.
+  Wait: (node, runner, world, dt, state) => {
+    const seconds = node.params?.duration;
+    if (!seconds || seconds <= 0) return done();
+    state.elapsed = (state.elapsed || 0) + dt;
+    return state.elapsed >= seconds * 1000 ? done() : RUNNING;
+  },
 };
 
 // Begin a Run at the Flow's OnStart Event. With a single cursor we take the first OnStart;
@@ -34,8 +43,8 @@ const EXECUTORS = {
 export function startRun(flowId, model) {
   const onStart = model.nodes.find((n) => n.kind === 'OnStart');
   return onStart
-    ? { flowId, current: onStart.id, status: 'running' }
-    : { flowId, current: null, status: 'idle' };
+    ? { flowId, current: onStart.id, status: 'running', state: {} }
+    : { flowId, current: null, status: 'idle', state: {} };
 }
 
 // Advance `run` for one frame. Instantaneous nodes chain within the same tick; a node that
@@ -53,7 +62,7 @@ export function tickRun(run, runner, model, world, dt) {
     if (!node) { run.status = 'halted'; break; } // current node vanished under us
 
     const exec = EXECUTORS[node.kind] || done; // unknown/effectless kind: pass through
-    const res = exec(node, runner, world, dt);
+    const res = exec(node, runner, world, dt, run.state);
     if (res.status === 'running') break; // park the cursor; resume next frame
 
     const conn = model.connections.find(
@@ -61,6 +70,7 @@ export function tickRun(run, runner, model, world, dt) {
     );
     if (!conn) { run.status = 'idle'; break; } // end of chain — Run complete
     run.current = conn.to.node;
+    run.state = {}; // fresh scratch for the node just entered
     if (++steps > maxSteps) { run.status = 'idle'; break; }
   }
   return run;

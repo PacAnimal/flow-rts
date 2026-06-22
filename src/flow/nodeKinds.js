@@ -32,6 +32,22 @@ export const NODE_KINDS = {
       { id: 'destination', type: 'tile', label: 'Destination', pickLabel: 'Select Position…' },
     ],
   },
+
+  Wait: {
+    kind: 'Wait',
+    category: 'control',
+    title: 'Wait',
+    // The first Flow Control node (CONTEXT.md): holds execution for a duration, then
+    // continues. Chainable like an Action — Exec in, Exec out.
+    ports: [
+      { id: 'in', dir: 'in', type: 'exec', label: '' },
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+    // 'duration' is a number Parameter, in seconds (ADR-0004). Unset/0 → no wait.
+    params: [
+      { id: 'duration', type: 'number', label: 'Seconds', min: 0, step: 0.5 },
+    ],
+  },
 };
 
 export function getNodeKind(kind) {

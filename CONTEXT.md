@@ -54,7 +54,8 @@ _Avoid_: command, task, operation
 **Flow Control**:
 A node kind that directs execution between other nodes (e.g. branch, delay, loop), or
 acts on the Flow system itself — notably a future Assign Flow node that, when executed,
-assigns another Flow to a target Unit. None exist yet; reserved in the model.
+assigns another Flow to a target Unit. Wait (holds execution for a duration, then continues)
+is the first; branch, loop, and Assign Flow remain reserved in the model.
 _Avoid_: logic node, control node
 
 **Port**:

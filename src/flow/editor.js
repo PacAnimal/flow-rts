@@ -227,10 +227,19 @@ export class FlowEditor {
     this.nodeEls.set(node.id, nodeEl);
   }
 
-  // A Parameter row: a label and a button that opens the relevant picker (ADR-0004).
+  // A Parameter row: a label plus an editor chosen by the param's type (ADR-0004). A 'tile'
+  // opens the in-world picker; a 'number' is edited inline. Either may be unset.
   _buildParamRow(node, param) {
     const row = el('div', 'param-row');
     row.appendChild(el('span', 'param-label', param.label));
+    row.appendChild(
+      param.type === 'number' ? this._numberInput(node, param) : this._tileButton(node, param),
+    );
+    return row;
+  }
+
+  // A 'tile' Parameter: a button showing the current value that opens the position picker.
+  _tileButton(node, param) {
     const btn = el('button', 'param-pick');
     const render = () => {
       const value = node.params && node.params[param.id];
@@ -242,10 +251,32 @@ export class FlowEditor {
     btn.addEventListener('pointerdown', (e) => e.stopPropagation());
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (param.type === 'tile') this._pickTile(node, param, render);
+      this._pickTile(node, param, render);
     });
-    row.appendChild(btn);
-    return row;
+    return btn;
+  }
+
+  // A 'number' Parameter: an inline numeric input. Empty clears it (unset); a valid number is
+  // stored via setParam (which drops null), persisted on change/blur.
+  _numberInput(node, param) {
+    const input = el('input', 'param-input');
+    input.type = 'number';
+    if (param.min != null) input.min = param.min;
+    if (param.step != null) input.step = param.step;
+    const current = node.params && node.params[param.id];
+    input.value = current == null ? '' : current;
+    input.placeholder = param.pickLabel || '—';
+    // Don't let pointer/keys on the input start a node-drag or trigger editor shortcuts.
+    input.addEventListener('pointerdown', (e) => e.stopPropagation());
+    input.addEventListener('keydown', (e) => e.stopPropagation());
+    const commit = () => {
+      const raw = input.value.trim();
+      const num = raw === '' ? null : Number(raw);
+      this.model.setParam(node.id, param.id, Number.isFinite(num) ? num : null);
+      this.library.save();
+    };
+    input.addEventListener('change', commit);
+    return input;
   }
 
   _pickTile(node, param, render) {
