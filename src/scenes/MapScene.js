@@ -9,7 +9,7 @@ import { openAssignOverlay } from '../flow/assign.js';
 import { registerPositionPicker } from '../flow/positionPicker.js';
 import { startRun, tickRun } from '../flow/runtime.js';
 import { MovementSystem } from '../movement.js';
-import { getResource } from '../resources.js';
+import { getResource, RESOURCES } from '../resources.js';
 import { DECORATIONS } from '../decorations.js';
 import '../flow/editor.css'; // shared overlay chrome — styles the Start/Pause button
 const MAP_W = 120;
@@ -18,6 +18,10 @@ const MAP_H = 90;
 // Tiles kept clear of crystals/decorations around the command center, beyond its footprint,
 // so the start area stays open (docs/adr/0009).
 const START_CLEARANCE = 3;
+
+// How close (in Tiles, to the footprint) a Worker must be to deliver Cargo. Forgiving, since a
+// large blocking Building makes Units settle a Tile or two short of touching it (docs/adr/0008).
+const DELIVER_RANGE = 2;
 
 // localStorage key for per-Unit Flow assignments ({ [unit.label]: flowId }).
 const ASSIGN_KEY = 'flow-rts.assignments.v1';
@@ -75,6 +79,10 @@ export class MapScene extends Phaser.Scene {
     this._deposits = [];
     this._depositByTile = new Map(); // `${tx},${ty}` → Deposit
 
+    // The player's Stockpile (docs/adr/0008): Resource id → amount, grown when a Worker delivers
+    // its Cargo at the command center. Shown in the materials panel.
+    this._stockpile = {};
+
     this._makeTileset();
     const { tiles, isHill, isRamp } = this._generateTerrain();
     this._isHill = isHill;
@@ -109,9 +117,11 @@ export class MapScene extends Phaser.Scene {
       walkable: (tx, ty) => this.walkable(tx, ty),
       adjacentDeposit: (unit) => this._adjacentDeposit(unit),
       collect: (unit, deposit) => this._collect(unit, deposit),
+      deliver: (unit) => this._deliver(unit),
     };
 
     this._buildStartButton();
+    this._buildMaterialsPanel();
   }
 
   // Per-frame loop (docs/adr/0005, 0007): while running, tick every Run (a running Move sets
@@ -588,6 +598,29 @@ export class MapScene extends Phaser.Scene {
     this._deposits = this._deposits.filter((d) => d !== deposit);
   }
 
+  // World primitive: if the Worker is beside the Command Center and carrying Cargo, move it all
+  // into the player's Stockpile and empty the Cargo (docs/adr/0008). No-op otherwise.
+  _deliver(unit) {
+    if (!unit.cargo || !this._adjacentToCommandCenter(unit)) return;
+    const { type, amount } = unit.cargo;
+    this._stockpile[type] = (this._stockpile[type] || 0) + amount;
+    unit.cargo = null;
+    this._refreshUnitLabel(unit);
+    this._updateMaterialsPanel();
+  }
+
+  // True if the Unit is within DELIVER_RANGE Tiles of the Command Center's Footprint (Chebyshev
+  // distance to the footprint rectangle). Forgiving, because the blocking footprint + steering
+  // leave a Unit settled a Tile or two short of actually touching the building.
+  _adjacentToCommandCenter(unit) {
+    const cc = this._commandCenter;
+    if (!cc) return false;
+    const { x: ux, y: uy } = this._unitTile(unit);
+    const dx = Math.max(cc.tx - ux, ux - (cc.tx + cc.tileW - 1), 0);
+    const dy = Math.max(cc.ty - uy, uy - (cc.ty + cc.tileH - 1), 0);
+    return Math.max(dx, dy) <= DELIVER_RANGE;
+  }
+
   // ── buildings ─────────────────────────────────────────────────────────────
 
   _spawnBuildings() {
@@ -704,6 +737,22 @@ export class MapScene extends Phaser.Scene {
     if (!this._startBtn) return;
     this._startBtn.textContent = this._running ? '❚❚ Pause' : '▶ Start';
     this._startBtn.classList.toggle('running', this._running);
+  }
+
+  // Top-left panel showing the player's Stockpile — one entry per known Resource.
+  _buildMaterialsPanel() {
+    const panel = document.createElement('div');
+    panel.className = 'materials-panel';
+    document.body.appendChild(panel);
+    this._materialsPanel = panel;
+    this._updateMaterialsPanel();
+  }
+
+  _updateMaterialsPanel() {
+    if (!this._materialsPanel) return;
+    this._materialsPanel.textContent = Object.values(RESOURCES)
+      .map((def) => `${def.glyph} ${this._stockpile[def.id] || 0}`)
+      .join('     ');
   }
 
   // Sync a Unit's sprite + label to its logical {x,y} (feet position), keeping depth = y so

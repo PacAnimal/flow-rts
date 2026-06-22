@@ -128,6 +128,11 @@ level spawns and never overlap one another or any other occupied Tiles. Distinct
 (a gatherable Resource source) and a Building (a player structure), though all occupy Tiles.
 _Avoid_: prop, scenery, obstacle (an obstacle is just a blocking Decoration, not its own thing)
 
+**Building**:
+A player structure occupying a Footprint of Tiles that it blocks, so Units path around it. The
+Command Center is the first Building and the place a Worker delivers Cargo to grow the Stockpile.
+_Avoid_: structure, depot, base
+
 **Resource**:
 A type of gatherable material that Workers collect — Crystals today; more (e.g. Gas, Wood)
 later. A Worker that gathers comes to hold an amount of a Resource. The Resource is the
@@ -146,6 +151,12 @@ _Avoid_: resource node (Node is reserved), patch, source, vein
 The Resource amount a Unit is currently carrying — a single {Resource, amount} slot (a Unit
 carries one Resource type at a time), bounded by the Unit's carry capacity. Capacity defaults
 to one gather's worth (10 Crystals today) and may be raised later by upgrades. Gathering adds
-its yield up to that capacity; a Worker already full does not gather. There is no base or
-drop-off yet, so Cargo only fills — nothing empties it.
-_Avoid_: inventory, load, payload, stockpile, hold
+its yield up to that capacity; a Worker already full does not gather. A Worker empties its Cargo
+into the player's Stockpile by delivering it at a Command Center.
+_Avoid_: inventory, load, payload, stockpile (that is the player-wide store), hold
+
+**Stockpile**:
+The player's accumulated Resources, kept per Resource type and shown in the materials panel. It
+grows only when a Worker delivers its Cargo at a Command Center; nothing spends it yet. Distinct
+from Cargo (one Unit's load): the Stockpile is the whole player's total.
+_Avoid_: bank, treasury, materials (the UI's label for it), resources (a Resource is the type)

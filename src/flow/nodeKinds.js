@@ -46,6 +46,19 @@ export const NODE_KINDS = {
     ],
   },
 
+  Deliver: {
+    kind: 'Deliver',
+    category: 'action',
+    title: 'Deliver Resources',
+    // Beside a Command Center, the Worker hands its Cargo to the player's Stockpile and empties
+    // its Cargo (docs/adr/0008). No Parameters; if not beside a Command Center (or carrying
+    // nothing) it is a no-op. Chainable like any Action.
+    ports: [
+      { id: 'in', dir: 'in', type: 'exec', label: '' },
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+  },
+
   Wait: {
     kind: 'Wait',
     category: 'control',

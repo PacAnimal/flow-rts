@@ -38,6 +38,21 @@
 .sim-toggle.running { background: #8a5a2b; border-color: #b3823f; }
 .sim-toggle.running:hover { background: #9c6731; }
 
+/* Materials panel — player Stockpile readout, top-left. */
+.materials-panel {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 1100;
+  padding: 8px 14px;
+  font: 700 14px/1 system-ui, sans-serif;
+  letter-spacing: 0.04em;
+  color: #cdeaff;
+  background: rgba(20, 26, 31, 0.82);
+  border: 1px solid #45606e;
+  border-radius: 6px;
+}
+
 .flow-editor {
   position: fixed;
   inset: 0;
