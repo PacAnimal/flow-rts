@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { Worker } from '../entities/Worker.js';
-import { TILE } from '../constants.js';
+import { TILE, EXTRUDE } from '../constants.js';
 const MAP_W = 120;
 const MAP_H = 90;
 
@@ -70,7 +70,19 @@ export class MapScene extends Phaser.Scene {
     this._drawRampTile(ctx,   T_RAMP    * TILE);
     this._drawRampGndTile(ctx, T_RAMP_GND * TILE);
 
-    this.textures.addCanvas('tileset', canvas);
+    // extrude each tile by EXTRUDE px: stretch to cover border, then blit crisp interior on top
+    const SLOT = TILE + 2 * EXTRUDE;
+    const dst  = document.createElement('canvas');
+    dst.width  = SLOT * TOTAL_TILES;
+    dst.height = TILE + 2 * EXTRUDE;
+    const dctx = dst.getContext('2d');
+    for (let t = 0; t < TOTAL_TILES; t++) {
+      const sx = t * TILE, dx = t * SLOT;
+      dctx.drawImage(canvas, sx, 0, TILE, TILE, dx,           0,       SLOT, TILE + 2 * EXTRUDE); // stretched border
+      dctx.drawImage(canvas, sx, 0, TILE, TILE, dx + EXTRUDE, EXTRUDE, TILE, TILE);               // crisp interior
+    }
+
+    this.textures.addCanvas('tileset', dst);
   }
 
   _drawHillBase(ctx, ox, variant) {
@@ -273,7 +285,7 @@ export class MapScene extends Phaser.Scene {
 
   _buildTilemap(tiles) {
     const map = this.make.tilemap({ data: tiles, tileWidth: TILE, tileHeight: TILE });
-    const ts  = map.addTilesetImage('tileset', 'tileset', TILE, TILE, 0, 0);
+    const ts  = map.addTilesetImage('tileset', 'tileset', TILE, TILE, EXTRUDE, 2 * EXTRUDE);
     map.createLayer(0, ts, 0, 0);
   }
 
