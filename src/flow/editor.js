@@ -32,7 +32,7 @@ export class FlowEditor {
   show() {
     this.visible = true;
     // Ensure there's a Flow to edit.
-    if (!this.library.list().length) this.library.create();
+    if (!this.library.list().length) { this.library.create(); this.library.save(); }
     if (!this.currentId || !this.library.get(this.currentId)) {
       this.setFlow(this.library.list()[0].id);
     }
@@ -101,6 +101,7 @@ export class FlowEditor {
 
   _newFlow() {
     const entry = this.library.create();
+    this.library.save();
     this.setFlow(entry.id);
     this._renderLibrary();
   }
@@ -130,6 +131,7 @@ export class FlowEditor {
     input.select();
     const commit = () => {
       this.library.rename(id, input.value);
+      this.library.save();
       this._renderLibrary();
     };
     input.addEventListener('blur', commit);
@@ -222,6 +224,7 @@ export class FlowEditor {
     }
     this._renderWires();
     this._renderLibrary(); // node count changed
+    this.library.save();
   }
 
   // ── wires ────────────────────────────────────────────────────────────────
@@ -238,7 +241,7 @@ export class FlowEditor {
       const hit = document.createElementNS(SVG_NS, 'path');
       hit.setAttribute('d', d);
       hit.classList.add('wire-hit');
-      hit.addEventListener('click', () => { this.model.disconnect(c.id); this._renderWires(); });
+      hit.addEventListener('click', () => { this.model.disconnect(c.id); this._renderWires(); this.library.save(); });
       // hit path first so the `.wire-hit:hover + .wire` highlight works.
       this.wireGroup.appendChild(hit);
       this.wireGroup.appendChild(path);
@@ -270,6 +273,7 @@ export class FlowEditor {
       this._addNodeEl(node);
       this._renderWires();
       this._renderLibrary();
+      this.library.save();
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -294,6 +298,7 @@ export class FlowEditor {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       nodeEl.classList.remove('dragging');
+      this.library.save(); // persist the moved position
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -324,7 +329,7 @@ export class FlowEditor {
         { node: out.node, port: out.port },
         { node: inn.node, port: inn.port },
       );
-      if (conn) this._renderWires();
+      if (conn) { this._renderWires(); this.library.save(); }
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);

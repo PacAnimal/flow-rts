@@ -8,6 +8,15 @@ import { getNodeKind, getPort } from './nodeKinds.js';
 let _seq = 0;
 const nextId = (prefix) => `${prefix}_${++_seq}`;
 
+// After restoring ids like `node_7` / `conn_3`, advance the counter past the highest
+// numeric suffix so freshly-created nodes/connections never collide with restored ones.
+function bumpSeqFrom(ids) {
+  for (const id of ids) {
+    const n = parseInt(String(id).split('_').pop(), 10);
+    if (Number.isFinite(n) && n > _seq) _seq = n;
+  }
+}
+
 export class FlowModel {
   constructor() {
     /** @type {Array<{id:string, kind:string, x:number, y:number}>} */
@@ -89,5 +98,20 @@ export class FlowModel {
         to: { ...c.to },
       })),
     };
+  }
+
+  static fromJSON(data) {
+    const m = new FlowModel();
+    m.nodes = (data?.nodes ?? []).map((n) => ({ id: n.id, kind: n.kind, x: n.x, y: n.y }));
+    m.connections = (data?.connections ?? []).map((c) => ({
+      id: c.id,
+      from: { node: c.from.node, port: c.from.port },
+      to: { node: c.to.node, port: c.to.port },
+    }));
+    bumpSeqFrom([
+      ...m.nodes.map((n) => n.id),
+      ...m.connections.map((c) => c.id),
+    ]);
+    return m;
   }
 }

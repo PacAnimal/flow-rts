@@ -6,6 +6,9 @@ import { openAssignOverlay } from '../flow/assign.js';
 const MAP_W = 120;
 const MAP_H = 90;
 
+// localStorage key for per-Unit Flow assignments ({ [unit.label]: flowId }).
+const ASSIGN_KEY = 'flow-rts.assignments.v1';
+
 // tileset layout: grass (0-2), hill autotile (3-18), shadow (19), ramp (20), ramp-ground (21)
 // hill autotile index = T_HILL_BASE + bitmask
 // bitmask bits: 0=N exposed, 1=S exposed, 2=E exposed, 3=W exposed
@@ -353,6 +356,7 @@ export class MapScene extends Phaser.Scene {
 
   _spawnUnits() {
     this.units = [];
+    this._assignments = this._loadAssignments(); // { [unit.label]: flowId }
     const cx = MAP_W / 2 | 0;
     const cy = MAP_H / 2 | 0;
     // three targets spaced 5 tiles apart — spiral outward from each until flat ground found
@@ -376,7 +380,9 @@ export class MapScene extends Phaser.Scene {
   // Make a Unit selectable and give it a Flow-name label above its sprite.
   _registerUnit(unit, label) {
     unit.label = label;
-    unit.assignedFlowId = null;
+    // Restore a persisted assignment, but only if that Flow still exists in the Library.
+    const savedId = this._assignments[label];
+    unit.assignedFlowId = savedId && flowLibrary.get(savedId) ? savedId : null;
     unit.sprite.setInteractive({ useHandCursor: true });
     unit.sprite.setData('unit', unit);
 
@@ -395,6 +401,19 @@ export class MapScene extends Phaser.Scene {
   _refreshUnitLabel(unit) {
     const entry = unit.assignedFlowId ? flowLibrary.get(unit.assignedFlowId) : null;
     unit.labelText.setText(entry ? entry.name : '');
+  }
+
+  // ── assignment persistence ─────────────────────────────────────────────────
+
+  _loadAssignments() {
+    try { return JSON.parse(localStorage.getItem(ASSIGN_KEY)) || {}; }
+    catch { return {}; }
+  }
+
+  _saveAssignments() {
+    const map = {};
+    for (const u of this.units) if (u.assignedFlowId) map[u.label] = u.assignedFlowId;
+    try { localStorage.setItem(ASSIGN_KEY, JSON.stringify(map)); } catch { /* quota/full */ }
   }
 
   // ── camera ────────────────────────────────────────────────────────────────
@@ -435,7 +454,10 @@ export class MapScene extends Phaser.Scene {
     this.input.on('gameobjectup', (_p, obj) => {
       if (this._dragMoved) return;
       const unit = obj.getData && obj.getData('unit');
-      if (unit) openAssignOverlay(unit, flowLibrary, (u) => this._refreshUnitLabel(u));
+      if (unit) openAssignOverlay(unit, flowLibrary, (u) => {
+        this._refreshUnitLabel(u);
+        this._saveAssignments();
+      });
     });
 
     this.input.on('wheel', (_p, _objs, _dx, deltaY) => {
