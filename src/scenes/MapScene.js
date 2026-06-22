@@ -30,6 +30,10 @@ export class MapScene extends Phaser.Scene {
   preload() {
     this.load.image('worker', '/sprites/worker.png');
     this.load.image('grass',  '/sprites/grass.png');
+    this.load.image('tree1', '/sprites/tree1.png');
+    this.load.image('tree2', '/sprites/tree2.png');
+    this.load.image('crystals1', '/sprites/crystals1.png');
+    this.load.image('crystals2', '/sprites/crystals2.png');
   }
 
   create() {
@@ -38,6 +42,7 @@ export class MapScene extends Phaser.Scene {
     this._isHill = isHill;
     this._buildTilemap(tiles);
     this._placeTrees(isHill, isRamp);
+    this._placeCrystals(isHill, isRamp);
     this._spawnUnits();
     this._setupCamera();
   }
@@ -292,9 +297,7 @@ export class MapScene extends Phaser.Scene {
   // ── trees ─────────────────────────────────────────────────────────────────
 
   _placeTrees(isHill, isRamp) {
-    this._makeTreeTextures();
     const r = mkRNG(999);
-    const names = ['tree_a', 'tree_b', 'tree_c'];
 
     for (let i = 0; i < 80; i++) {
       const cx    = (r() * (MAP_W - 6) + 3) | 0;
@@ -314,37 +317,40 @@ export class MapScene extends Phaser.Scene {
 
         const wx  = tx * TILE + TILE * 0.5 + ((r() * 22 - 11) | 0);
         const wy  = ty * TILE + TILE * 0.42 + ((r() * 14 - 7) | 0);
-        const img = this.add.image(wx, wy, names[r() * names.length | 0]);
+        const img = this.add.image(wx, wy, r() < 0.5 ? 'tree1' : 'tree2');
         img.setOrigin(0.5, 0.88);
-        img.setScale(0.8 + r() * 0.35);
+        img.setScale(TILE * (1.5 + r() * 1.0) / 1024);
         img.setDepth(wy);
       }
     }
   }
 
-  _makeTreeTextures() {
-    [
-      { name: 'tree_a', w: 54, h: 72, crown: '#286018', mid: '#327824', hi: '#469634' },
-      { name: 'tree_b', w: 46, h: 62, crown: '#235816', mid: '#2c6e20', hi: '#3e8630' },
-      { name: 'tree_c', w: 50, h: 68, crown: '#2b6620', mid: '#367a2c', hi: '#4a9040' },
-    ].forEach(({ name, w, h, crown, mid, hi }) => {
-      const canvas = document.createElement('canvas');
-      canvas.width = w; canvas.height = h;
-      const c = canvas.getContext('2d');
-      const cx = w / 2, trunkBase = h * 0.75, r = w * 0.36;
-      c.fillStyle = 'rgba(0,0,0,0.22)';
-      c.beginPath(); c.ellipse(cx, h - 5, r * 0.72, r * 0.2, 0, 0, Math.PI * 2); c.fill();
-      c.fillStyle = '#5a3c1c';
-      c.fillRect(cx - 4, trunkBase - h * 0.22, 8, h * 0.22 + 5);
-      c.fillStyle = crown;
-      c.beginPath(); c.arc(cx - r * 0.5, trunkBase - r * 0.65, r * 0.58, 0, Math.PI * 2); c.fill();
-      c.beginPath(); c.arc(cx + r * 0.5, trunkBase - r * 0.70, r * 0.55, 0, Math.PI * 2); c.fill();
-      c.fillStyle = mid;
-      c.beginPath(); c.arc(cx, trunkBase - r * 0.9, r, 0, Math.PI * 2); c.fill();
-      c.fillStyle = hi;
-      c.beginPath(); c.arc(cx - r * 0.2, trunkBase - r * 1.15, r * 0.38, 0, Math.PI * 2); c.fill();
-      this.textures.addCanvas(name, canvas);
-    });
+  // ── crystals ──────────────────────────────────────────────────────────────
+
+  _placeCrystals(isHill, isRamp) {
+    const r = mkRNG(1337);
+
+    for (let i = 0; i < 25; i++) {
+      const cx    = (r() * (MAP_W - 10) + 5) | 0;
+      const cy    = (r() * (MAP_H - 10) + 5) | 0;
+      const count = (r() * 4 + 3) | 0; // 3–6 per cluster
+
+      for (let j = 0; j < count; j++) {
+        const tx = cx + ((r() * 9 - 4) | 0);
+        const ty = cy + ((r() * 9 - 4) | 0);
+        if (tx < 1 || tx >= MAP_W - 1 || ty < 1 || ty >= MAP_H - 1) continue;
+
+        // flat grass only — no cliffs, shadows, hills, or ramps
+        if (isHill(tx, ty) || isRamp(tx, ty) || isHill(tx, ty - 1)) continue;
+
+        const wx  = tx * TILE + TILE * 0.5 + ((r() * 16 - 8) | 0);
+        const wy  = ty * TILE + TILE * 0.7  + ((r() * 10 - 5) | 0);
+        const img = this.add.image(wx, wy, r() < 0.5 ? 'crystals1' : 'crystals2');
+        img.setOrigin(0.5, 1);
+        img.setScale(TILE * (0.8 + r() * 0.5) / 1024);
+        img.setDepth(wy);
+      }
+    }
   }
 
   // ── units ─────────────────────────────────────────────────────────────────
