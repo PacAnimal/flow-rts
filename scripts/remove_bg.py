@@ -1,59 +1,29 @@
 #!/usr/bin/env python3
 """
-Remove a solid-color background from a sprite image.
+Remove a solid-color background from a sprite image using alpha matting.
 
-The background color is auto-detected from the edge pixels — no hardcoding needed.
-Anti-aliased / semi-blended edge pixels are handled with chroma keying:
-    P = α·F + (1−α)·B  →  F = (P − (1−α)·B) / α
-so a pixel that's 50% pink + 50% foreground becomes 50%-opaque foreground color
-with the pink contribution subtracted out.
+Background color is read from the top-left pixel of the image.
+A trimap is generated automatically (definite BG / unknown boundary / definite FG),
+then PyMatting's closed-form algorithm computes a clean per-pixel alpha with
+color decontamination — no manual tuning needed.
 
 Usage:
     python scripts/remove_bg.py sprites/command_center.png [out.png]
 """
 
 import sys
+import shutil
 from pathlib import Path
 import numpy as np
 from PIL import Image
-
-
-def detect_bg_color(arr: np.ndarray, edge_px: int = 4) -> np.ndarray:
-    """Return the dominant background color sampled from the image edges."""
-    h, w = arr.shape[:2]
-    samples = np.concatenate([
-        arr[:edge_px,  :,        :3].reshape(-1, 3),
-        arr[-edge_px:, :,        :3].reshape(-1, 3),
-        arr[:,  :edge_px,        :3].reshape(-1, 3),
-        arr[:, -edge_px:,        :3].reshape(-1, 3),
-    ])
-    alphas = np.concatenate([
-        arr[:edge_px,  :,        3].reshape(-1),
-        arr[-edge_px:, :,        3].reshape(-1),
-        arr[:,  :edge_px,        3].reshape(-1),
-        arr[:, -edge_px:,        3].reshape(-1),
-    ])
-    # accept semi-opaque edge pixels too (handles already-partially-processed images)
-    opaque = samples[alphas > 64]
-    pool = opaque if len(opaque) >= 8 else samples
-    bg = np.median(pool, axis=0)
-
-    # adaptive threshold: generous minimum so anti-aliased edge blends are caught.
-    # A pixel needs to be ~80 RGB-distance away from BG before it gets full opacity.
-    dists = np.sqrt(np.sum((pool.astype(float) - bg) ** 2, axis=1))
-    spread = np.median(dists)
-    threshold = max(130.0, spread * 8.0)
-
-    return bg, threshold
+from pymatting import estimate_alpha_cf, estimate_foreground_ml
 
 
 def remove_bg(src: str, dst: str) -> None:
-    import shutil
     src_path = Path(src)
     orig_path = src_path.with_suffix(".orig" + src_path.suffix)
 
     if orig_path.exists():
-        # always process the untouched original so re-runs are idempotent
         read_from = orig_path
         print(f"Using backup   : {orig_path}")
     else:
@@ -62,39 +32,70 @@ def remove_bg(src: str, dst: str) -> None:
         print(f"Backup created : {orig_path}")
 
     img = Image.open(read_from).convert("RGBA")
-    arr = np.array(img, dtype=float)
+    arr = np.array(img)
+    rgb = arr[:, :, :3].astype(float)
 
-    bg, threshold = detect_bg_color(arr.astype(np.uint8))
+    # background color from top-left pixel
+    bg = rgb[0, 0].copy()
     print(f"Background color : RGB({bg[0]:.0f}, {bg[1]:.0f}, {bg[2]:.0f})")
-    print(f"Keying threshold : {threshold:.1f}")
 
-    rgb = arr[:, :, :3]
-    src_alpha = arr[:, :, 3] / 255.0        # existing alpha (usually 1 for JPG-sourced PNGs)
-
-    # per-pixel distance from background in RGB space
     dist = np.sqrt(np.sum((rgb - bg) ** 2, axis=2))
 
-    # fg_alpha: 0 = pure background, 1 = pure foreground
-    fg_alpha = np.clip(dist / threshold, 0.0, 1.0)
+    # trimap thresholds — high is calibrated to the BG-to-neutral distance so the
+    # unknown zone covers all genuine edge anti-alias pixels (typically dist 20–200
+    # for a vivid chroma background like magenta)
+    neutral_grey   = np.array([128.0, 128.0, 128.0])
+    bg_to_neutral  = float(np.sqrt(np.sum((bg - neutral_grey) ** 2)))
+    low  = 20.0
+    high = max(200.0, bg_to_neutral * 0.90)
+    print(f"Trimap thresholds: low={low:.1f}  high={high:.1f}")
 
-    # chroma-key decontamination: recover F from P = α·F + (1−α)·B.
-    # Only applied in the alpha ramp zone (dist < threshold).
-    # Pixels beyond threshold are pure foreground — keep their RGB unchanged.
-    a3   = fg_alpha[:, :, np.newaxis]
-    bg3  = bg[np.newaxis, np.newaxis, :]
-    safe = np.where(a3 > 1e-6, a3, 1.0)
-    decontaminated = (rgb - (1.0 - a3) * bg3) / safe
-    decontaminated = np.clip(decontaminated, 0.0, 255.0)
+    # 0=BG  0.5=unknown  1=FG
+    trimap = np.where(dist < low, 0.0, np.where(dist > high, 1.0, 0.5))
 
-    out_rgb = np.where(a3 >= 1.0, rgb, decontaminated)
+    image_f   = np.clip(rgb / 255.0, 0.0, 1.0)
+    alpha_mat = estimate_alpha_cf(image_f, trimap)
 
-    # combine keyed alpha with any pre-existing source alpha
-    out_alpha = fg_alpha * src_alpha * 255.0
+    # recover foreground colour using pymatting's unmodified alpha so the
+    # colour estimate isn't skewed by any post-processing we apply to alpha
+    fg_color = estimate_foreground_ml(image_f, alpha_mat)
 
-    result = np.zeros_like(arr)
-    result[:, :, :3] = out_rgb
-    result[:, :, 3]  = out_alpha
-    result = np.clip(result, 0, 255).astype(np.uint8)
+    # suppress alpha for pixels that are colour-close to background — this
+    # catches interior holes that matting smoothness pulls to high alpha
+    bg_suppress = np.clip((dist - low) / (high - low), 0.0, 1.0)
+    alpha = np.minimum(alpha_mat, bg_suppress)
+
+    # chroma despill: any pixel within `high` distance of background may carry
+    # background hue in the recovered foreground colour. find channels that are
+    # "hot" in the background (above neutral 128) and clamp them to the value of
+    # the "clean" (low) channels. keyed off colour distance, not alpha, so it
+    # fires even for fully-opaque edge pixels that sit just outside the trimap
+    # unknown zone.
+    key_chs   = [i for i, v in enumerate(bg) if v > 128.0]
+    clean_chs = [i for i in range(3) if i not in key_chs]
+    if key_chs and clean_chs:
+        clean_ref  = np.max(np.stack([fg_color[:, :, i] for i in clean_chs], axis=2), axis=2)
+
+        # primary zone: pixels colour-close to background
+        near_bg = dist < high
+        # secondary zone: pixels whose recovered foreground still carries the
+        # background hue signature — dark purple has large dist from bright magenta
+        # but still has R≈B>>G, so we catch it here regardless of dist
+        hue_spill = np.ones(dist.shape, dtype=bool)
+        for kc in key_chs:
+            hue_spill &= (fg_color[:, :, kc] - clean_ref > 0.05)
+        apply_despill = near_bg | hue_spill
+
+        fg_out = fg_color.copy()
+        for ch in key_chs:
+            fg_out[:, :, ch] = np.where(apply_despill,
+                                        np.minimum(fg_color[:, :, ch], clean_ref),
+                                        fg_color[:, :, ch])
+        fg_color = fg_out
+
+    result = np.empty((*arr.shape[:2], 4), dtype=np.uint8)
+    result[:, :, :3] = np.clip(fg_color * 255.0, 0, 255).astype(np.uint8)
+    result[:, :,  3] = np.clip(alpha    * 255.0, 0, 255).astype(np.uint8)
 
     Image.fromarray(result, "RGBA").save(dst)
     print(f"Saved: {dst}")
@@ -102,5 +103,5 @@ def remove_bg(src: str, dst: str) -> None:
 
 if __name__ == "__main__":
     src = sys.argv[1] if len(sys.argv) > 1 else "sprites/command_center.png"
-    dst = sys.argv[2] if len(sys.argv) > 2 else src  # overwrite by default
+    dst = sys.argv[2] if len(sys.argv) > 2 else src
     remove_bg(src, dst)

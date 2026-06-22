@@ -698,7 +698,7 @@ export class MapScene extends Phaser.Scene {
     });
 
     this.input.on('wheel', (_p, _objs, _dx, deltaY) => {
-      cam.setZoom(Phaser.Math.Clamp(cam.zoom - deltaY * 0.001, 0.25, 2));
+      cam.setZoom(Phaser.Math.Clamp(cam.zoom - deltaY * 0.001, 0.25, 8));
     });
 
     this.game.canvas.style.cursor = 'grab';
