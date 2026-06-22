@@ -8,9 +8,14 @@ import { registerPositionPicker } from '../flow/positionPicker.js';
 import { startRun, tickRun } from '../flow/runtime.js';
 import { MovementSystem } from '../movement.js';
 import { getResource } from '../resources.js';
+import { DECORATIONS } from '../decorations.js';
 import '../flow/editor.css'; // shared overlay chrome — styles the Start/Pause button
 const MAP_W = 120;
 const MAP_H = 90;
+
+// Tiles kept clear of crystals/decorations around the command center, beyond its footprint,
+// so the start area stays open (docs/adr/0009).
+const START_CLEARANCE = 3;
 
 // localStorage key for per-Unit Flow assignments ({ [unit.label]: flowId }).
 const ASSIGN_KEY = 'flow-rts.assignments.v1';
@@ -56,8 +61,13 @@ export class MapScene extends Phaser.Scene {
     // (docs/adr/0005). Set before spawning Units so their Runs don't begin at assignment.
     this._running = false;
 
-    // Deposits on the map (docs/adr/0008): a list plus a Tile→Deposit lookup that walkable()
-    // and adjacency consult. Initialised before terrain/crystals/Units populate it.
+    // Shared Tile-occupancy layer (docs/adr/0009): `${tx},${ty}` → { kind, blocking }. Every
+    // footprint feature (Deposit, Decoration, Building) registers here. Spawn rejects a
+    // placement if any of its Footprint Tiles is occupied; walkable() blocks on blocking ones.
+    this._occupied = new Map();
+
+    // Deposits (docs/adr/0008): a list plus a Tile→Deposit lookup the gather code consults.
+    // Deposits also register in the occupancy layer above.
     this._deposits = [];
     this._depositByTile = new Map(); // `${tx},${ty}` → Deposit
 
@@ -66,10 +76,9 @@ export class MapScene extends Phaser.Scene {
     this._isHill = isHill;
     this._isRamp = isRamp;
     this._buildTilemap(tiles);
-    this._placeTrees(isHill, isRamp);
-    this._placeCrystals(isHill, isRamp);
-    this._placeObstacles(isHill, isRamp);
-    this._spawnBuildings();
+    this._spawnBuildings();   // reserve command-center footprint + start clearance first
+    this._placeCrystals();    // clustered crystal Deposits (docs/adr/0009)
+    this._placeDecorations(); // trees, holes — scattered, no overlap (docs/adr/0009)
     this._spawnUnits();
     this._setupCamera();
     this.input.mouse?.disableContextMenu(); // allow right-click as a cancel gesture
@@ -117,11 +126,13 @@ export class MapScene extends Phaser.Scene {
     for (const unit of this.units) this._placeUnit(unit);
   }
 
-  // A Tile is Walkable if it is lowland ground or a ramp (hill tops are not) AND no Deposit
-  // occupies it — a Deposit blocks its Tile, so Units path around it (CONTEXT.md / ADR-0008).
+  // A Tile is Walkable if it is lowland ground or a ramp (hill tops are not) AND not held by a
+  // blocking occupant — a Deposit, a blocking Decoration, or a Building (CONTEXT.md, ADR-0009).
+  // Non-blocking occupants (e.g. trees) reserve a Tile for spawning but stay Walkable.
   walkable(tx, ty) {
     if (tx < 0 || tx >= MAP_W || ty < 0 || ty >= MAP_H) return false;
-    if (this._depositByTile.has(`${tx},${ty}`)) return false;
+    const occ = this._occupied.get(`${tx},${ty}`);
+    if (occ && occ.blocking) return false;
     return !(this._isHill(tx, ty) && !this._isRamp(tx, ty));
   }
 
@@ -370,67 +381,143 @@ export class MapScene extends Phaser.Scene {
     map.createLayer(0, ts, 0, 0);
   }
 
-  // ── trees ─────────────────────────────────────────────────────────────────
+  // ── occupancy (docs/adr/0009) ───────────────────────────────────────────────
 
-  _placeTrees(isHill, isRamp) {
-    const r = mkRNG(999);
+  // A Tile is clear to place something on: in bounds (with a 1-Tile border), flat walkable
+  // ground (no hill, ramp, or cliff-shadow), and not already occupied by anything.
+  _groundClear(tx, ty) {
+    if (tx < 1 || tx >= MAP_W - 1 || ty < 1 || ty >= MAP_H - 1) return false;
+    if (this._isHill(tx, ty) || this._isRamp(tx, ty) || this._isHill(tx, ty - 1)) return false;
+    return !this._occupied.has(`${tx},${ty}`);
+  }
 
-    for (let i = 0; i < 80; i++) {
-      const cx    = (r() * (MAP_W - 6) + 3) | 0;
-      const cy    = (r() * (MAP_H - 6) + 3) | 0;
-      const count = (r() * 4 + 2) | 0;
+  // True if every Tile of a w×h Footprint anchored at (tx,ty) is clear.
+  _footprintFree(tx, ty, w, h) {
+    for (let dy = 0; dy < h; dy++)
+      for (let dx = 0; dx < w; dx++)
+        if (!this._groundClear(tx + dx, ty + dy)) return false;
+    return true;
+  }
 
-      for (let j = 0; j < count; j++) {
-        const tx = cx + ((r() * 7 - 3) | 0);
-        const ty = cy + ((r() * 7 - 3) | 0);
-        if (tx < 1 || tx >= MAP_W - 1 || ty < 1 || ty >= MAP_H - 1) continue;
-        if (isRamp(tx, ty)) continue;
+  // Mark a w×h Footprint occupied by `kind` (blocking or not) so spawning avoids it and, when
+  // blocking, walkable() routes Units around it.
+  _occupy(tx, ty, w, h, kind, blocking) {
+    for (let dy = 0; dy < h; dy++)
+      for (let dx = 0; dx < w; dx++)
+        this._occupied.set(`${tx + dx},${ty + dy}`, { kind, blocking });
+  }
 
-        const onSouthCliff = isHill(tx, ty) && !isHill(tx, ty + 1);
-        const onShadow     = !isHill(tx, ty) && isHill(tx, ty - 1);
-        if (onSouthCliff || onShadow) continue;
-        if (isHill(tx, ty) && r() > 0.3) continue;
-
-        const wx  = tx * TILE + TILE * 0.5 + ((r() * 22 - 11) | 0);
-        const wy  = ty * TILE + TILE * 0.42 + ((r() * 14 - 7) | 0);
-        const img = this.add.image(wx, wy, r() < 0.5 ? 'tree1' : 'tree2');
-        img.setOrigin(0.5, 0.88);
-        img.setScale(TILE * (1.5 + r() * 1.0) / 1024);
-        img.setDepth(wy);
+  // Reserve a non-blocking clearance rectangle (Footprint + margin) so nothing spawns there but
+  // Units can still stand in it. Won't overwrite an existing (e.g. blocking) occupant.
+  _reserveClearance(tx, ty, w, h, margin) {
+    for (let y = ty - margin; y < ty + h + margin; y++)
+      for (let x = tx - margin; x < tx + w + margin; x++) {
+        const key = `${x},${y}`;
+        if (x >= 0 && x < MAP_W && y >= 0 && y < MAP_H && !this._occupied.has(key))
+          this._occupied.set(key, { kind: 'clearance', blocking: false });
       }
-    }
   }
 
   // ── crystals ──────────────────────────────────────────────────────────────
 
-  _placeCrystals(isHill, isRamp) {
+  // Crystal Deposits spawn in contiguous blobs of 3–6: a seed Tile plus random adjacent free
+  // Tiles, so each cluster reads as one tight patch (docs/adr/0009).
+  _placeCrystals() {
     const r = mkRNG(1337);
 
-    for (let i = 0; i < 25; i++) {
-      const cx    = (r() * (MAP_W - 10) + 5) | 0;
-      const cy    = (r() * (MAP_H - 10) + 5) | 0;
-      const count = (r() * 4 + 3) | 0; // 3–6 per cluster
+    // A guaranteed starter cluster: the clear Tile nearest map centre (just outside the
+    // command-center clearance), so Workers always have crystals to gather near the base.
+    const starter = this._nearestClearTile((MAP_W / 2) | 0, (MAP_H / 2) | 0);
+    if (starter) this._growCrystalCluster(starter, 4 + ((r() * 3) | 0), r); // 4–6
 
-      for (let j = 0; j < count; j++) {
-        const tx = cx + ((r() * 9 - 4) | 0);
-        const ty = cy + ((r() * 9 - 4) | 0);
-        if (tx < 1 || tx >= MAP_W - 1 || ty < 1 || ty >= MAP_H - 1) continue;
-
-        // flat grass only — no cliffs, shadows, hills, or ramps
-        if (isHill(tx, ty) || isRamp(tx, ty) || isHill(tx, ty - 1)) continue;
-        // one Deposit (and one sprite) per Tile (docs/adr/0008)
-        if (this._depositByTile.has(`${tx},${ty}`)) continue;
-
-        const wx  = tx * TILE + TILE * 0.5 + ((r() * 16 - 8) | 0);
-        const wy  = ty * TILE + TILE * 0.7  + ((r() * 10 - 5) | 0);
-        const img = this.add.image(wx, wy, r() < 0.5 ? 'crystals1' : 'crystals2');
-        img.setOrigin(0.5, 1);
-        img.setScale(TILE * (0.8 + r() * 0.5) / 1024);
-        img.setDepth(wy);
-
-        this._addDeposit('crystals', tx, ty, img);
+    const CLUSTERS = 22;
+    for (let i = 0; i < CLUSTERS; i++) {
+      let seed = null;
+      for (let tries = 0; tries < 30 && !seed; tries++) {
+        const tx = (r() * (MAP_W - 10) + 5) | 0;
+        const ty = (r() * (MAP_H - 10) + 5) | 0;
+        if (this._groundClear(tx, ty)) seed = { x: tx, y: ty };
       }
+      if (seed) this._growCrystalCluster(seed, 3 + ((r() * 4) | 0), r);
     }
+  }
+
+  // Spiral outward from (cx,cy) for the closest clear Tile — used to anchor the starter crystal
+  // cluster just beyond the reserved clearance around the command center.
+  _nearestClearTile(cx, cy) {
+    for (let radius = 0; radius <= 25; radius++)
+      for (let dy = -radius; dy <= radius; dy++)
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue; // ring only
+          if (this._groundClear(cx + dx, cy + dy)) return { x: cx + dx, y: cy + dy };
+        }
+    return null;
+  }
+
+  _growCrystalCluster(seed, target, r) {
+    const placed = [];
+    const place = (tx, ty) => {
+      const img = this.add.image(tx * TILE + TILE * 0.5, ty * TILE + TILE * 0.5,
+        r() < 0.5 ? 'crystals1' : 'crystals2');
+      img.setOrigin(0.5, 0.5);
+      img.setScale(TILE * (0.8 + r() * 0.5) / 1024);
+      img.setDepth(ty * TILE + TILE); // sort as if grounded at the Tile's bottom edge
+      this._addDeposit('crystals', tx, ty, img); // registers Deposit + occupancy
+      placed.push({ x: tx, y: ty });
+    };
+    place(seed.x, seed.y);
+    const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    while (placed.length < target) {
+      const frontier = [];
+      for (const p of placed)
+        for (const [dx, dy] of DIRS) {
+          const nx = p.x + dx, ny = p.y + dy;
+          if (this._groundClear(nx, ny) && !frontier.some((f) => f.x === nx && f.y === ny))
+            frontier.push({ x: nx, y: ny });
+        }
+      if (!frontier.length) break; // hemmed in — settle for a smaller cluster
+      const pick = frontier[(r() * frontier.length) | 0];
+      place(pick.x, pick.y);
+    }
+  }
+
+  // ── decorations (docs/adr/0009) ─────────────────────────────────────────────
+
+  // Scatter every Decoration type from the data table; each registers its Footprint in the
+  // occupancy layer so nothing overlaps and blocking types make their Tiles unwalkable.
+  _placeDecorations() {
+    const r = mkRNG(999);
+    for (const def of Object.values(DECORATIONS)) this._scatterDecoration(def, r);
+  }
+
+  _scatterDecoration(def, r) {
+    if (def.clustered) {
+      const clusters = Math.ceil(def.count / 5);
+      for (let c = 0; c < clusters; c++) {
+        const cx = (r() * (MAP_W - 6) + 3) | 0;
+        const cy = (r() * (MAP_H - 6) + 3) | 0;
+        const n = 3 + ((r() * 4) | 0);
+        for (let k = 0; k < n; k++)
+          this._tryPlaceDecoration(def, cx + ((r() * 7 - 3) | 0), cy + ((r() * 7 - 3) | 0), r);
+      }
+    } else {
+      for (let i = 0; i < def.count; i++)
+        this._tryPlaceDecoration(def, (r() * (MAP_W - 2) + 1) | 0, (r() * (MAP_H - 2) + 1) | 0, r);
+    }
+  }
+
+  // Best-effort: place one Decoration of `def` at (tx,ty) if its Footprint is free, else skip.
+  _tryPlaceDecoration(def, tx, ty, r) {
+    if (!this._footprintFree(tx, ty, def.w, def.h)) return;
+    const key = def.sprites[(r() * def.sprites.length) | 0];
+    const px = (tx + def.w * 0.5) * TILE;
+    const py = (ty + def.h) * TILE; // base at the Footprint's bottom edge
+    const img = this.add.image(px, py, key);
+    img.setOrigin(0.5, def.originY);
+    const [lo, hi] = def.scale;
+    img.setScale(def.w * TILE * (lo + r() * (hi - lo)) / Math.max(img.width, img.height));
+    img.setDepth(py);
+    this._occupy(tx, ty, def.w, def.h, `deco:${def.id}`, def.blocking);
   }
 
   // ── deposits & gathering (docs/adr/0008) ────────────────────────────────────
@@ -440,6 +527,7 @@ export class MapScene extends Phaser.Scene {
     const deposit = { type, tx, ty, amount: def ? def.depositAmount : 0, sprite };
     this._deposits.push(deposit);
     this._depositByTile.set(`${tx},${ty}`, deposit);
+    this._occupy(tx, ty, 1, 1, 'deposit', true); // Deposits block their Tile (docs/adr/0009)
     return deposit;
   }
 
@@ -492,28 +580,8 @@ export class MapScene extends Phaser.Scene {
   _removeDeposit(deposit) {
     deposit.sprite.destroy();
     this._depositByTile.delete(`${deposit.tx},${deposit.ty}`);
+    this._occupied.delete(`${deposit.tx},${deposit.ty}`); // free the Tile (docs/adr/0009)
     this._deposits = this._deposits.filter((d) => d !== deposit);
-  }
-
-  // ── obstacles ─────────────────────────────────────────────────────────────
-
-  _placeObstacles(isHill, isRamp) {
-    const keys = Array.from({ length: 13 }, (_, i) => `obstacle_${String(i + 1).padStart(2, '0')}`);
-    const r = mkRNG(2468);
-
-    for (let i = 0; i < 40; i++) {
-      const tx = (r() * (MAP_W - 10) + 5) | 0;
-      const ty = (r() * (MAP_H - 10) + 5) | 0;
-      if (isHill(tx, ty) || isRamp(tx, ty) || isHill(tx, ty - 1)) continue;
-
-      const wx  = tx * TILE + TILE * 0.5 + ((r() * 30 - 15) | 0);
-      const wy  = ty * TILE + TILE * 0.75 + ((r() * 20 - 10) | 0);
-      const key = keys[(r() * keys.length) | 0];
-      const img = this.add.image(wx, wy, key);
-      img.setOrigin(0.5, 0.85);
-      img.setScale(TILE * (2.0 + r() * 1.5) / Math.max(img.width, img.height));
-      img.setDepth(wy);
-    }
   }
 
   // ── buildings ─────────────────────────────────────────────────────────────
@@ -522,7 +590,12 @@ export class MapScene extends Phaser.Scene {
     const cx = (MAP_W / 2) | 0;
     const cy = (MAP_H / 2) | 0;
     // 3×3 footprint centered on map center — top-left tile is (cx-1, cy-1)
-    this._commandCenter = new CommandCenter(this, cx - 1, cy - 1);
+    const tx = cx - 1, ty = cy - 1;
+    this._commandCenter = new CommandCenter(this, tx, ty);
+    // Reserve a clear start area, then mark the footprint blocking (so Units path around it).
+    // Order matters: clearance first (non-blocking), then the footprint overwrites the centre.
+    this._reserveClearance(tx, ty, 3, 3, START_CLEARANCE);
+    this._occupy(tx, ty, 3, 3, 'building', true);
   }
 
   // ── units ─────────────────────────────────────────────────────────────────
