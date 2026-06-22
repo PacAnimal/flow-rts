@@ -6,6 +6,7 @@ import { openAssignOverlay } from '../flow/assign.js';
 import { registerPositionPicker } from '../flow/positionPicker.js';
 import { startRun, tickRun } from '../flow/runtime.js';
 import { MovementSystem } from '../movement.js';
+import '../flow/editor.css'; // shared overlay chrome — styles the Start/Pause button
 const MAP_W = 120;
 const MAP_H = 90;
 
@@ -45,6 +46,10 @@ export class MapScene extends Phaser.Scene {
   }
 
   create() {
+    // The simulation starts paused: no Flow ticks and no Unit movement until START is pressed
+    // (docs/adr/0005). Set before spawning Units so their Runs don't begin at assignment.
+    this._running = false;
+
     this._makeTileset();
     const { tiles, isHill, isRamp } = this._generateTerrain();
     this._isHill = isHill;
@@ -77,12 +82,15 @@ export class MapScene extends Phaser.Scene {
       position: (unit) => ({ x: unit.x, y: unit.y }),
       walkable: (tx, ty) => this.walkable(tx, ty),
     };
+
+    this._buildStartButton();
   }
 
-  // Per-frame loop (docs/adr/0005, 0007): tick every Run (a running Move sets its goal), then
-  // integrate movement for all Units at once (so idle Units also get shoved), then sync sprites.
+  // Per-frame loop (docs/adr/0005, 0007): while running, tick every Run (a running Move sets
+  // its goal), then integrate movement for all Units at once (so idle Units also get shoved),
+  // then sync sprites. Paused ⇒ nothing ticks and nothing moves.
   update(_time, delta) {
-    if (!this.units) return;
+    if (!this.units || !this._running) return;
     for (const unit of this.units) {
       const run = unit.run;
       if (!run || run.status !== 'running') continue;
@@ -460,11 +468,36 @@ export class MapScene extends Phaser.Scene {
   }
 
   // (Re)start a Unit's Run from its assigned Flow's OnStart. Called when a Unit is registered
-  // and whenever its Assignment changes — always-live, so a fresh assignment runs at once and
-  // re-assigning discards the old Run (docs/adr/0005). No Flow assigned → no Run (idle).
+  // and when its Assignment changes — a fresh Assignment runs from the top. A Run only exists
+  // while the simulation is running (docs/adr/0005): paused, or with no Flow assigned, idle.
   _startRun(unit) {
-    const entry = unit.assignedFlowId ? flowLibrary.get(unit.assignedFlowId) : null;
+    const entry = this._running && unit.assignedFlowId ? flowLibrary.get(unit.assignedFlowId) : null;
     unit.run = entry ? startRun(entry.id, entry.model) : null;
+  }
+
+  // START/PAUSE (docs/adr/0005). PAUSE only flips the flag — update() then freezes, so every
+  // Run keeps its cursor and every Unit keeps its position. START resumes those frozen Runs
+  // exactly where they were and starts any assigned Unit that has no Run yet (firing OnStart),
+  // so the very first START launches the Flows and later ones continue rather than restart.
+  _setRunning(running) {
+    this._running = running;
+    if (running) for (const unit of this.units) if (!unit.run) this._startRun(unit);
+    this._updateStartBtn();
+  }
+
+  _buildStartButton() {
+    const btn = document.createElement('button');
+    btn.className = 'sim-toggle';
+    btn.addEventListener('click', () => this._setRunning(!this._running));
+    document.body.appendChild(btn);
+    this._startBtn = btn;
+    this._updateStartBtn();
+  }
+
+  _updateStartBtn() {
+    if (!this._startBtn) return;
+    this._startBtn.textContent = this._running ? '❚❚ Pause' : '▶ Start';
+    this._startBtn.classList.toggle('running', this._running);
   }
 
   // Sync a Unit's sprite + label to its logical {x,y} (feet position), keeping depth = y so

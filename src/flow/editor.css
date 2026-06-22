@@ -18,6 +18,26 @@
 .flow-toggle:hover { background: #344b56; }
 .flow-toggle.active { background: #3a7bd5; border-color: #5b97e8; }
 
+/* Simulation Start/Pause control — top centre, above the canvas. */
+.sim-toggle {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1100;
+  padding: 8px 20px;
+  font: 700 13px/1 system-ui, sans-serif;
+  letter-spacing: 0.04em;
+  color: #e8eef2;
+  background: #2f7d4f;
+  border: 1px solid #43a86a;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.sim-toggle:hover { background: #36915b; }
+.sim-toggle.running { background: #8a5a2b; border-color: #b3823f; }
+.sim-toggle.running:hover { background: #9c6731; }
+
 .flow-editor {
   position: fixed;
   inset: 0;

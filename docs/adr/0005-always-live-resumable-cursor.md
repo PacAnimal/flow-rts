@@ -2,8 +2,8 @@
 
 A Unit's assigned Flow executes continuously: the simulation is always running, so
 assigning a Flow starts it immediately (its OnStart fires at the moment of assignment) and
-re-assigning discards the old Run and starts a fresh one. There is no authoring/running
-split and no global play/pause.
+re-assigning discards the old Run and starts a fresh one. (Amended — see below — with a
+global Start/Pause gate; the always-live semantics still hold *while* running.)
 
 Each Unit's Run is a single **cursor** — the node it is currently at — plus that node's
 in-progress state. Instantaneous nodes advance the cursor the same tick; a long-running
@@ -38,3 +38,20 @@ Consequences:
   moment of assignment, with no special global-start case.
 - A deleted current node is a normal, expected outcome (Run → halted), not an error to guard
   against by other means.
+
+## Amendment: a global Start/Pause gate
+
+The original decision rejected play/pause but noted it "could be layered on later without
+changing the cursor model." It since has been. The simulation now begins **paused** — no Runs
+tick and no Units move — until a **START** button is pressed. PAUSE freezes everything in
+place: it only flips a flag, so each Run keeps its cursor and each Unit keeps its position and
+Path. START **resumes** those frozen Runs exactly where they were, and additionally starts any
+assigned Unit that has no Run yet (firing its OnStart). So the *first* START launches the
+Flows, and a later START after a PAUSE *continues* rather than restarts.
+
+This is purely a global gate, exactly as predicted: the cursor model, per-Unit Run state, and
+the interpreter are untouched. "The moment its Flow begins running" now resolves to the first
+START, or to the moment of assignment when assigned *while already running* — the always-live
+behaviour still holds within the running phase. The gate lives on the world side
+(`MapScene.update` early-returns while paused); the engine remains unaware of it.
+
