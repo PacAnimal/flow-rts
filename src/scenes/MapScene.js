@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { Worker } from '../entities/Worker.js';
+import { CommandCenter } from '../entities/CommandCenter.js';
 import { TILE, EXTRUDE, UNIT_CARRY_CAPACITY } from '../constants.js';
 import { flowLibrary } from '../flow/library.js';
 import { openAssignOverlay } from '../flow/assign.js';
@@ -38,12 +39,16 @@ export class MapScene extends Phaser.Scene {
   constructor() { super('MapScene'); }
 
   preload() {
+    this.load.image('command_center', '/sprites/command_center.png');
     this.load.image('worker', '/sprites/worker.png');
-    this.load.image('grass',  '/sprites/grass.png');
     this.load.image('tree1', '/sprites/tree1.png');
     this.load.image('tree2', '/sprites/tree2.png');
     this.load.image('crystals1', '/sprites/crystals1.png');
     this.load.image('crystals2', '/sprites/crystals2.png');
+    for (let i = 1; i <= 13; i++) {
+      const n = String(i).padStart(2, '0');
+      this.load.image(`obstacle_${n}`, `/sprites/obstacles/obstacles_${n}.png`);
+    }
   }
 
   create() {
@@ -63,6 +68,8 @@ export class MapScene extends Phaser.Scene {
     this._buildTilemap(tiles);
     this._placeTrees(isHill, isRamp);
     this._placeCrystals(isHill, isRamp);
+    this._placeObstacles(isHill, isRamp);
+    this._spawnBuildings();
     this._spawnUnits();
     this._setupCamera();
     this.input.mouse?.disableContextMenu(); // allow right-click as a cancel gesture
@@ -126,10 +133,8 @@ export class MapScene extends Phaser.Scene {
     canvas.height = TILE;
     const ctx = canvas.getContext('2d');
 
-    const grassImg = this.textures.get('grass').getSourceImage();
-    [T_GRASS_A, T_GRASS_B, T_GRASS_C].forEach(t => {
-      ctx.drawImage(grassImg, 0, 0, grassImg.width, grassImg.height, t * TILE, 0, TILE, TILE);
-    });
+    ctx.fillStyle = '#3a3530';
+    ctx.fillRect(0, 0, TILE * 3, TILE);
 
     // pre-generate all 16 hill autotile variants
     for (let mask = 0; mask < 16; mask++) {
@@ -488,6 +493,36 @@ export class MapScene extends Phaser.Scene {
     deposit.sprite.destroy();
     this._depositByTile.delete(`${deposit.tx},${deposit.ty}`);
     this._deposits = this._deposits.filter((d) => d !== deposit);
+  }
+
+  // ── obstacles ─────────────────────────────────────────────────────────────
+
+  _placeObstacles(isHill, isRamp) {
+    const keys = Array.from({ length: 13 }, (_, i) => `obstacle_${String(i + 1).padStart(2, '0')}`);
+    const r = mkRNG(2468);
+
+    for (let i = 0; i < 40; i++) {
+      const tx = (r() * (MAP_W - 10) + 5) | 0;
+      const ty = (r() * (MAP_H - 10) + 5) | 0;
+      if (isHill(tx, ty) || isRamp(tx, ty) || isHill(tx, ty - 1)) continue;
+
+      const wx  = tx * TILE + TILE * 0.5 + ((r() * 30 - 15) | 0);
+      const wy  = ty * TILE + TILE * 0.75 + ((r() * 20 - 10) | 0);
+      const key = keys[(r() * keys.length) | 0];
+      const img = this.add.image(wx, wy, key);
+      img.setOrigin(0.5, 0.85);
+      img.setScale(TILE * (2.0 + r() * 1.5) / Math.max(img.width, img.height));
+      img.setDepth(wy);
+    }
+  }
+
+  // ── buildings ─────────────────────────────────────────────────────────────
+
+  _spawnBuildings() {
+    const cx = (MAP_W / 2) | 0;
+    const cy = (MAP_H / 2) | 0;
+    // 3×3 footprint centered on map center — top-left tile is (cx-1, cy-1)
+    this._commandCenter = new CommandCenter(this, cx - 1, cy - 1);
   }
 
   // ── units ─────────────────────────────────────────────────────────────────
