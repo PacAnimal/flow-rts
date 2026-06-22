@@ -1,0 +1,277 @@
+/* Flow editor overlay. Sits above the Phaser canvas; when shown it captures pointer
+   events so the map's camera-drag is suppressed. See docs/adr/0001. */
+
+.flow-toggle {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 1100;
+  padding: 8px 16px;
+  font: 600 13px/1 system-ui, sans-serif;
+  letter-spacing: 0.04em;
+  color: #e8eef2;
+  background: #2b3a44;
+  border: 1px solid #45606e;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.flow-toggle:hover { background: #344b56; }
+.flow-toggle.active { background: #3a7bd5; border-color: #5b97e8; }
+
+.flow-editor {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  font: 13px/1.4 system-ui, sans-serif;
+  color: #e8eef2;
+  background: rgba(16, 22, 27, 0.92);
+}
+.flow-editor.hidden { display: none; }
+
+/* Library column */
+.flow-library {
+  width: 230px;
+  flex: 0 0 230px;
+  padding: 18px 14px;
+  background: #18211a;
+  border-right: 1px solid #2c3a43;
+  overflow-y: auto;
+}
+.lib-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.lib-head h2 {
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #8aa0ad;
+}
+.lib-new {
+  font: 600 11px/1 system-ui, sans-serif;
+  color: #cfe6d2;
+  background: #2a3f2e;
+  border: 1px solid #3d5a42;
+  border-radius: 5px;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.lib-new:hover { background: #345038; }
+.lib-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 10px;
+  margin-bottom: 6px;
+  background: #20312a;
+  border: 1px solid #2f4636;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.lib-item:hover { background: #274034; }
+.lib-item.active { background: #2f5740; border-color: #4e8a63; }
+.lib-name { font-weight: 600; }
+.lib-count { font-size: 10px; color: #7e958a; }
+.lib-rename {
+  width: 100%;
+  font: 600 13px/1 system-ui, sans-serif;
+  color: #fff;
+  background: #16241c;
+  border: 1px solid #4e8a63;
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+
+/* Palette */
+.flow-palette {
+  width: 220px;
+  flex: 0 0 220px;
+  padding: 18px 16px;
+  background: #1b242b;
+  border-right: 1px solid #2c3a43;
+  overflow-y: auto;
+}
+.flow-palette h2 {
+  margin: 0 0 14px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #8aa0ad;
+}
+.palette-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: #232f37;
+  border: 1px solid #33454f;
+  border-left-width: 4px;
+  border-radius: 6px;
+  cursor: grab;
+  user-select: none;
+}
+.palette-item:hover { background: #2a3942; }
+.palette-title { font-weight: 600; }
+.palette-tag {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8aa0ad;
+}
+.palette-hint {
+  margin-top: 18px;
+  color: #6f8593;
+  font-size: 11px;
+}
+
+/* Category accents */
+.category-event { border-left-color: #e0a23c; }
+.category-action { border-left-color: #3a7bd5; }
+
+/* Canvas */
+.flow-canvas {
+  position: relative;
+  flex: 1 1 auto;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 1px 1px, #2a3742 1px, transparent 0) 0 0 / 22px 22px,
+    #131a1f;
+}
+.flow-wires {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+.wire {
+  fill: none;
+  stroke: #6f8a99;
+  stroke-width: 2.5;
+}
+.wire-temp { fill: none; stroke: #5b97e8; stroke-width: 2.5; stroke-dasharray: 6 4; }
+.wire-temp:not(.active) { display: none; }
+.wire-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+.wire-hit:hover + .wire,
+.wire-group .wire-hit:hover { stroke: #e0533c; }
+
+/* Nodes */
+.flow-node {
+  position: absolute;
+  top: 0;
+  left: 0;
+  min-width: 140px;
+  background: #232f37;
+  border: 1px solid #3a4b56;
+  border-top: 3px solid #3a4b56;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  user-select: none;
+}
+.flow-node.category-event { border-top-color: #e0a23c; }
+.flow-node.category-action { border-top-color: #3a7bd5; }
+.flow-node.dragging { box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55); z-index: 5; }
+
+.node-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  font-weight: 600;
+  cursor: grab;
+}
+.node-header:active { cursor: grabbing; }
+.node-delete {
+  border: none;
+  background: transparent;
+  color: #6f8593;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.node-delete:hover { color: #e0533c; }
+
+.node-body {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 0 12px;
+}
+.port-col { display: flex; flex-direction: column; gap: 8px; }
+.port-row { display: flex; align-items: center; gap: 6px; }
+.port-row.port-out { justify-content: flex-end; }
+.port-label { font-size: 11px; color: #b9c7d0; }
+
+.port {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #45606e;
+  border: 2px solid #6f8a99;
+  cursor: crosshair;
+}
+.port-in { margin-left: -7px; }
+.port-out { margin-right: -7px; }
+.port:hover { background: #5b97e8; border-color: #8ab6f0; }
+.port-exec { border-radius: 3px; } /* exec ports square-ish to read as control flow */
+
+/* The current Flow's name, shown on the canvas */
+.flow-name {
+  position: absolute;
+  top: 12px;
+  left: 16px;
+  font: 600 14px/1 system-ui, sans-serif;
+  color: #9fb4c0;
+  pointer-events: none;
+}
+
+/* Assign-flow overlay (opened by clicking a Unit) */
+.assign-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 12, 15, 0.55);
+  font: 13px/1.4 system-ui, sans-serif;
+}
+.assign-overlay.hidden { display: none; }
+.assign-panel {
+  width: 280px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 18px;
+  color: #e8eef2;
+  background: #1b242b;
+  border: 1px solid #3a4b56;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.assign-panel h2 {
+  margin: 0 0 14px;
+  font-size: 14px;
+}
+.assign-list { display: flex; flex-direction: column; gap: 6px; }
+.assign-item {
+  text-align: left;
+  padding: 10px 12px;
+  font: 600 13px/1 system-ui, sans-serif;
+  color: #e8eef2;
+  background: #232f37;
+  border: 1px solid #33454f;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.assign-item:hover { background: #2a3942; }
+.assign-item.active { background: #2f5740; border-color: #4e8a63; }
+.assign-none { color: #b9a0a0; }
+.assign-empty { color: #6f8593; font-size: 12px; }
