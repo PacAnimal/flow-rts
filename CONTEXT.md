@@ -113,6 +113,21 @@ Units are not part of a Path — they are avoided locally, moment to moment, as 
 along it, so two Units sharing a destination settle near it rather than stacking on one Tile.
 _Avoid_: route, trail, track, waypoints (a Path is made of waypoints)
 
+**Footprint**:
+The set of Tiles an on-map thing covers: a rectangle, width×height in Tiles, anchored at a
+top-left Tile. A 1×1 Footprint is a single Tile. Decisions like blocking apply across a thing's
+whole Footprint. Deposits, Decorations, and Buildings each have a Footprint.
+_Avoid_: area, extent, bounds, footprint cells
+
+**Decoration**:
+A piece of map scenery occupying a Footprint of Tiles — trees and holes today; more later.
+Each Decoration has a type, which declares its sprite(s) and Footprint size, and is either
+blocking or not: a blocking Decoration (an *obstacle*) makes its whole Footprint unwalkable so
+Units path around it, while a non-blocking one is passable. Decorations are scattered when a
+level spawns and never overlap one another or any other occupied Tiles. Distinct from a Deposit
+(a gatherable Resource source) and a Building (a player structure), though all occupy Tiles.
+_Avoid_: prop, scenery, obstacle (an obstacle is just a blocking Decoration, not its own thing)
+
 **Resource**:
 A type of gatherable material that Workers collect — Crystals today; more (e.g. Gas, Wood)
 later. A Worker that gathers comes to hold an amount of a Resource. The Resource is the
