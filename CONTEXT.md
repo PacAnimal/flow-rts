@@ -60,8 +60,16 @@ _Avoid_: trigger port, flow port
 
 **Data port**:
 A Port that carries a typed value between nodes (e.g. a destination feeding into Move).
-Reserved in the model; no Data ports exist yet.
+Reserved in the model; no Data ports exist yet. A node's Parameter of the same name is
+the Data port's inline default — the value used when nothing is wired to it.
 _Avoid_: value port, argument port
+
+**Parameter**:
+A named, typed value configured on a Node itself (e.g. Move's `destination`, a Tile).
+Distinct from a Port: a Parameter is set on the node (no Connection involved). When the
+matching Data port is later wired, the incoming value overrides the Parameter. A
+Parameter may be unset — a valid authoring state, since nothing executes yet.
+_Avoid_: property, field, attribute, setting
 
 **Connection**:
 A wire joining one node's output Port to another node's input Port. An Exec connection
@@ -71,3 +79,15 @@ _Avoid_: edge, wire, link, arrow
 **Canvas**:
 The surface in the editor where Nodes are placed and Connections are drawn.
 _Avoid_: workspace, board, sheet
+
+**Tile**:
+One cell of the map's grid. The map is a grid of Tiles. A Tile is addressed by integer
+coordinates {x, y} in Tile units (not pixels); positions like Move's destination are
+stored this way and converted to pixels only when something moves.
+_Avoid_: cell, square, grid square
+
+**Walkable**:
+A property of a Tile that a Unit may stand on or move to: lowland ground and ramp Tiles.
+Hill (plateau) Tiles are not Walkable. This is terrain-type passability, not reachability
+(there is no pathfinding yet). A destination must be a Walkable Tile.
+_Avoid_: passable, traversable, reachable

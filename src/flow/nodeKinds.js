@@ -21,10 +21,15 @@ export const NODE_KINDS = {
     category: 'action',
     title: 'Move',
     // An Action is chainable: Exec in to run it, Exec out to run the next node.
-    // A 'destination' data input will be added here later (ADR-0002) — not yet.
     ports: [
       { id: 'in', dir: 'in', type: 'exec', label: '' },
       { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+    // Parameters: literals configured on the node (ADR-0004). 'destination' is a Tile,
+    // picked on the map via "Select Position"; it is the inline default of the future
+    // 'destination' Data port reserved in ADR-0002.
+    params: [
+      { id: 'destination', type: 'tile', label: 'Destination', pickLabel: 'Select Position…' },
     ],
   },
 };
@@ -37,4 +42,8 @@ export function getNodeKind(kind) {
 
 export function getPort(kind, portId) {
   return getNodeKind(kind).ports.find((p) => p.id === portId) || null;
+}
+
+export function getParams(kind) {
+  return getNodeKind(kind).params || [];
 }

@@ -27,9 +27,18 @@ export class FlowModel {
 
   addNode(kind, x, y) {
     getNodeKind(kind); // validates the kind exists
-    const node = { id: nextId('node'), kind, x: Math.round(x), y: Math.round(y) };
+    // `params` holds this node's configured Parameter literals, keyed by param id (ADR-0004).
+    const node = { id: nextId('node'), kind, x: Math.round(x), y: Math.round(y), params: {} };
     this.nodes.push(node);
     return node;
+  }
+
+  setParam(nodeId, paramId, value) {
+    const node = this.getNode(nodeId);
+    if (!node) return;
+    if (!node.params) node.params = {};
+    if (value == null) delete node.params[paramId];
+    else node.params[paramId] = value;
   }
 
   getNode(id) {
@@ -102,7 +111,10 @@ export class FlowModel {
 
   static fromJSON(data) {
     const m = new FlowModel();
-    m.nodes = (data?.nodes ?? []).map((n) => ({ id: n.id, kind: n.kind, x: n.x, y: n.y }));
+    m.nodes = (data?.nodes ?? []).map((n) => ({
+      id: n.id, kind: n.kind, x: n.x, y: n.y,
+      params: n.params ? { ...n.params } : {},
+    }));
     m.connections = (data?.connections ?? []).map((c) => ({
       id: c.id,
       from: { node: c.from.node, port: c.from.port },

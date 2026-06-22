@@ -3,6 +3,7 @@ import { Worker } from '../entities/Worker.js';
 import { TILE, EXTRUDE } from '../constants.js';
 import { flowLibrary } from '../flow/library.js';
 import { openAssignOverlay } from '../flow/assign.js';
+import { registerPositionPicker } from '../flow/positionPicker.js';
 const MAP_W = 120;
 const MAP_H = 90;
 
@@ -45,11 +46,21 @@ export class MapScene extends Phaser.Scene {
     this._makeTileset();
     const { tiles, isHill, isRamp } = this._generateTerrain();
     this._isHill = isHill;
+    this._isRamp = isRamp;
     this._buildTilemap(tiles);
     this._placeTrees(isHill, isRamp);
     this._placeCrystals(isHill, isRamp);
     this._spawnUnits();
     this._setupCamera();
+    this.input.mouse?.disableContextMenu(); // allow right-click as a cancel gesture
+    registerPositionPicker((opts) => this._beginPositionPick(opts));
+  }
+
+  // A Tile is Walkable if it is lowland ground or a ramp; hill (plateau) tops are not.
+  // Terrain-type passability only — no pathfinding (see CONTEXT.md / ADR-0004).
+  walkable(tx, ty) {
+    if (tx < 0 || tx >= MAP_W || ty < 0 || ty >= MAP_H) return false;
+    return !(this._isHill(tx, ty) && !this._isRamp(tx, ty));
   }
 
   // ── tileset ──────────────────────────────────────────────────────────────
@@ -439,26 +450,38 @@ export class MapScene extends Phaser.Scene {
 
     this.input.on('pointerdown', (p, over) => {
       this._dragMoved = false;
+      if (this._pick) {
+        if (p.rightButtonDown()) { this._cancelPick(); return; } // right-click cancels
+        // In pick mode a click picks and a drag pans — start tracking either way.
+        drag = { ox: p.x, oy: p.y, sx: cam.scrollX, sy: cam.scrollY };
+        return;
+      }
       // Clicking a Unit selects it (handled by gameobjectup) — don't start a camera drag.
       if (over.length) return;
       drag = { ox: p.x, oy: p.y, sx: cam.scrollX, sy: cam.scrollY };
       this.game.canvas.style.cursor = 'grabbing';
     });
     this.input.on('pointermove', p => {
+      if (this._pick) {
+        const { tx, ty } = this._pointerTile(p);
+        this._updatePickHighlight(tx, ty);
+      }
       if (!drag) return;
       if (Math.abs(p.x - drag.ox) + Math.abs(p.y - drag.oy) > 3) this._dragMoved = true;
       cam.setScroll(drag.sx - (p.x - drag.ox), drag.sy - (p.y - drag.oy));
     });
     const endDrag = () => {
+      // A click (no drag) in pick mode commits the hovered Tile.
+      if (this._pick && !this._dragMoved) this._commitPick();
       drag = null;
-      this.game.canvas.style.cursor = 'grab';
+      this.game.canvas.style.cursor = this._pick ? 'crosshair' : 'grab';
     };
     this.input.on('pointerup', endDrag);
     this.input.on('pointerupoutside', endDrag);
 
-    // Click a Unit → open the assign-flow overlay (ignore if it was a camera drag).
+    // Click a Unit → open the assign-flow overlay (ignore while picking or after a drag).
     this.input.on('gameobjectup', (_p, obj) => {
-      if (this._dragMoved) return;
+      if (this._pick || this._dragMoved) return;
       const unit = obj.getData && obj.getData('unit');
       if (unit) openAssignOverlay(unit, flowLibrary, (u) => {
         this._refreshUnitLabel(u);
@@ -470,6 +493,65 @@ export class MapScene extends Phaser.Scene {
       cam.setZoom(Phaser.Math.Clamp(cam.zoom - deltaY * 0.001, 0.25, 2));
     });
 
+    this.game.canvas.style.cursor = 'grab';
+  }
+
+  // ── position picking ────────────────────────────────────────────────────────
+
+  _pointerTile(p) {
+    const wp = this.cameras.main.getWorldPoint(p.x, p.y);
+    return { tx: Math.floor(wp.x / TILE), ty: Math.floor(wp.y / TILE) };
+  }
+
+  // Enter pick mode: highlight the hovered Tile (green if Walkable, red if not). A click
+  // on a Walkable Tile commits; right-click/Esc cancels (wired via the camera handlers).
+  _beginPositionPick({ onPicked, onCancel }) {
+    if (this._pick) this._endPick();
+    const gfx = this.add.graphics().setDepth(2e6);
+    // window-level so Esc works even though the pick starts from a DOM button (the Phaser
+    // canvas may not have keyboard focus yet).
+    const escHandler = (e) => { if (e.key === 'Escape') this._cancelPick(); };
+    window.addEventListener('keydown', escHandler);
+    this._pick = {
+      onPicked, onCancel, gfx, tile: null,
+      escOff: () => window.removeEventListener('keydown', escHandler),
+    };
+    const { tx, ty } = this._pointerTile(this.input.activePointer);
+    this._updatePickHighlight(tx, ty);
+    this.game.canvas.style.cursor = 'crosshair';
+  }
+
+  _updatePickHighlight(tx, ty) {
+    if (!this._pick) return;
+    const ok = this.walkable(tx, ty);
+    const g = this._pick.gfx;
+    g.clear();
+    g.fillStyle(ok ? 0x33dd55 : 0xdd3333, 0.35);
+    g.lineStyle(2, ok ? 0x66ff88 : 0xff6666, 0.9);
+    g.fillRect(tx * TILE, ty * TILE, TILE, TILE);
+    g.strokeRect(tx * TILE, ty * TILE, TILE, TILE);
+    this._pick.tile = { x: tx, y: ty, ok };
+  }
+
+  _commitPick() {
+    const t = this._pick && this._pick.tile;
+    if (!t || !t.ok) return; // ignore non-Walkable / off-map clicks; stay in pick mode
+    const onPicked = this._pick.onPicked;
+    this._endPick();
+    onPicked && onPicked({ x: t.x, y: t.y });
+  }
+
+  _cancelPick() {
+    const onCancel = this._pick && this._pick.onCancel;
+    this._endPick();
+    onCancel && onCancel();
+  }
+
+  _endPick() {
+    if (!this._pick) return;
+    this._pick.gfx.destroy();
+    this._pick.escOff();
+    this._pick = null;
     this.game.canvas.style.cursor = 'grab';
   }
 }

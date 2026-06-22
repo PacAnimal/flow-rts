@@ -5,7 +5,8 @@
 // camera-drag with no extra coordination. See CONTEXT.md and docs/adr/0001.
 
 import './editor.css';
-import { NODE_KINDS, getNodeKind } from './nodeKinds.js';
+import { NODE_KINDS, getNodeKind, getParams } from './nodeKinds.js';
+import { pickPosition } from './positionPicker.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -210,8 +211,53 @@ export class FlowEditor {
     body.appendChild(outputs);
     nodeEl.appendChild(body);
 
+    const params = getParams(node.kind);
+    if (params.length) {
+      const section = el('div', 'node-params');
+      for (const param of params) section.appendChild(this._buildParamRow(node, param));
+      nodeEl.appendChild(section);
+    }
+
     this.canvasEl.appendChild(nodeEl);
     this.nodeEls.set(node.id, nodeEl);
+  }
+
+  // A Parameter row: a label and a button that opens the relevant picker (ADR-0004).
+  _buildParamRow(node, param) {
+    const row = el('div', 'param-row');
+    row.appendChild(el('span', 'param-label', param.label));
+    const btn = el('button', 'param-pick');
+    const render = () => {
+      const value = node.params && node.params[param.id];
+      btn.textContent = paramText(param, value);
+      btn.classList.toggle('set', value != null);
+    };
+    render();
+    // Don't let the press start a node-drag.
+    btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (param.type === 'tile') this._pickTile(node, param, render);
+    });
+    row.appendChild(btn);
+    return row;
+  }
+
+  _pickTile(node, param, render) {
+    this.hide();
+    this.toggleBtn.style.display = 'none'; // don't let the Flow toggle reopen mid-pick
+    const reopen = () => { this.toggleBtn.style.display = ''; this.show(); };
+    pickPosition({
+      current: (node.params && node.params[param.id]) || null,
+      prompt: `Click a tile to set ${param.label} — Esc to cancel`,
+      onPicked: (tile) => {
+        this.model.setParam(node.id, param.id, tile);
+        this.library.save();
+        render();
+        reopen();
+      },
+      onCancel: reopen,
+    });
   }
 
   _removeNode(id) {
@@ -343,6 +389,12 @@ function el(tag, className, text) {
   if (className) node.className = className;
   if (text != null) node.textContent = text;
   return node;
+}
+
+function paramText(param, value) {
+  if (value == null) return param.pickLabel || 'Set…';
+  if (param.type === 'tile') return `(${value.x}, ${value.y})`;
+  return String(value);
 }
 
 function wirePath(a, b) {
