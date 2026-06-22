@@ -1,6 +1,8 @@
 import Phaser from 'phaser';
 import { Worker } from '../entities/Worker.js';
 import { CommandCenter } from '../entities/CommandCenter.js';
+import { Barracks } from '../entities/Barracks.js';
+import { Factory } from '../entities/Factory.js';
 import { TILE, EXTRUDE, UNIT_CARRY_CAPACITY } from '../constants.js';
 import { flowLibrary } from '../flow/library.js';
 import { openAssignOverlay } from '../flow/assign.js';
@@ -45,6 +47,8 @@ export class MapScene extends Phaser.Scene {
 
   preload() {
     this.load.image('command_center', '/sprites/command_center.png');
+    this.load.image('barracks', '/sprites/barracks.png');
+    this.load.image('factory', '/sprites/factory.png');
     this.load.image('worker', '/sprites/worker.png');
     this.load.image('tree1', '/sprites/tree1.png');
     this.load.image('tree2', '/sprites/tree2.png');
@@ -589,13 +593,23 @@ export class MapScene extends Phaser.Scene {
   _spawnBuildings() {
     const cx = (MAP_W / 2) | 0;
     const cy = (MAP_H / 2) | 0;
-    // 3×3 footprint centered on map center — top-left tile is (cx-1, cy-1)
+
+    const place = (BuildingClass, tx, ty, w, h) => {
+      const b = new BuildingClass(this, tx, ty);
+      this._reserveClearance(tx, ty, w, h, START_CLEARANCE);
+      this._occupy(tx, ty, w, h, 'building', true);
+      return b;
+    };
+
+    // command center at map center
     const tx = cx - 1, ty = cy - 1;
-    this._commandCenter = new CommandCenter(this, tx, ty);
-    // Reserve a clear start area, then mark the footprint blocking (so Units path around it).
-    // Order matters: clearance first (non-blocking), then the footprint overwrites the centre.
-    this._reserveClearance(tx, ty, 3, 3, START_CLEARANCE);
-    this._occupy(tx, ty, 3, 3, 'building', true);
+    this._commandCenter = place(CommandCenter, tx, ty, 3, 3);
+
+    // barracks 6 tiles to the right
+    this._barracks = place(Barracks, tx + 6, ty, 3, 3);
+
+    // factory 6 tiles to the left
+    this._factory = place(Factory, tx - 6, ty, 3, 3);
   }
 
   // ── units ─────────────────────────────────────────────────────────────────
