@@ -13,6 +13,10 @@ diagonal shapes never bleed into each other.
 A dilation pass (up to merge_frac of image size) bridges small gaps before grouping,
 so disconnected parts of the same sprite (e.g. a detached shadow) are kept together.
 
+Output files are named {stem}_x{left}_y{top}.png where left/top are the pixel
+coordinates of the sprite's bounding box in the source image — the position is
+always unambiguous and grid layout is obvious from the numbers.
+
 Usage:
     python scripts/cut_sprites.py sprites/obstacles.png [sprites/obstacles/]
 """
@@ -70,31 +74,31 @@ def cut_sprites(
     out.mkdir(parents=True, exist_ok=True)
     stem = Path(input_path).stem
 
-    saved = 0
+    components = []
     for i in range(1, num + 1):
         comp = labeled == i
-
-        # filter by real (undilated) pixel count to drop noise
         real_area = int((comp & mask).sum())
         if real_area < min_area:
             continue
-
-        # bounding box of the dilated component, plus padding
         rows = np.where(np.any(comp, axis=1))[0]
         cols = np.where(np.any(comp, axis=0))[0]
-        r0 = max(0, int(rows[0])  - padding)
+        r0 = max(0, int(rows[0]) - padding)
         r1 = min(h - 1, int(rows[-1]) + padding)
-        c0 = max(0, int(cols[0])  - padding)
+        c0 = max(0, int(cols[0]) - padding)
         c1 = min(w - 1, int(cols[-1]) + padding)
+        components.append((r0, c0, r1, c1, real_area, comp))
 
-        # copy the crop, then zero-alpha every pixel NOT in this component
+    # sort top-to-bottom, left-to-right by upper-left corner
+    components.sort(key=lambda x: (x[0], x[1]))
+
+    saved = 0
+    for r0, c0, r1, c1, real_area, comp in components:
         crop_arr = arr[r0:r1 + 1, c0:c1 + 1].copy()
         comp_crop = comp[r0:r1 + 1, c0:c1 + 1]
         crop_arr[~comp_crop, 3] = 0
-
-        out_path = out / f"{stem}_{saved + 1:02d}.png"
+        out_path = out / f"{stem}_x{c0}_y{r0}.png"
         Image.fromarray(crop_arr, "RGBA").save(out_path)
-        print(f"  [{saved + 1:02d}] {out_path.name}  {c1-c0+1}x{r1-r0+1}px  area={real_area}px")
+        print(f"  {out_path.name}  {c1-c0+1}x{r1-r0+1}px  area={real_area}px")
         saved += 1
 
     print(f"\nSaved {saved} sprites → {out}/")

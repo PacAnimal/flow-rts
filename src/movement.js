@@ -64,6 +64,7 @@ export class MovementSystem {
     for (let i = 0; i < units.length; i++) {
       const unit = units[i];
       const v = vel[i];
+      unit._vel = v; // expose to directional sprite logic
       const nx = unit.x + v.x * s;
       const ny = unit.y + v.y * s;
       const moved = dist(unit.x, unit.y, nx, ny);

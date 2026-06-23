@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { Worker } from '../entities/Worker.js';
+import { Marine } from '../entities/Marine.js';
 import { CommandCenter } from '../entities/CommandCenter.js';
 import { Barracks } from '../entities/Barracks.js';
 import { Factory } from '../entities/Factory.js';
@@ -53,7 +54,10 @@ export class MapScene extends Phaser.Scene {
     this.load.image('command_center', '/sprites/command_center.png');
     this.load.image('barracks', '/sprites/barracks.png');
     this.load.image('factory', '/sprites/factory.png');
-    this.load.image('worker', '/sprites/worker.png');
+    const UNIT_TYPES = ['worker', 'marine'];
+    const UNIT_DIRS  = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'dead'];
+    for (const type of UNIT_TYPES)
+      for (const d of UNIT_DIRS) this.load.image(`${type}_${d}`, `/sprites/${type}_${d}.png`);
     for (const key of DECORATIONS.tree.sprites) this.load.image(key, `/sprites/${key}.png`);
     for (const key of DECORATIONS.obstacle.sprites) this.load.image(key, `/sprites/decor2/${key}.png`);
     for (const key of DECORATIONS.groundDecor.sprites) this.load.image(key, `/sprites/decor2/${key}.png`);
@@ -810,24 +814,35 @@ void main(void){
   _spawnUnits() {
     this.units = [];
     this._assignments = this._loadAssignments(); // { [unit.label]: flowId }
-    const cx = MAP_W / 2 | 0;
-    const cy = MAP_H / 2 | 0;
-    // three targets spaced 5 tiles apart — spiral outward from each until flat ground found
-    [cx - 5, cx, cx + 5].forEach((targetX, i) => {
-      for (let r = 0; r <= 8; r++) {
-        for (let dy = -r; dy <= r; dy++) {
-          for (let dx = -r; dx <= r; dx++) {
+    const cc  = this._commandCenter;
+    const bar = this._barracks;
+    // workers below the command center facing it; marines to the right of the barracks facing it
+    const unitSpawns = [
+      { tx: cc.tx - 1,                    ty: cc.ty + cc.tileH + 3,   label: 'Worker 1', Cls: Worker, dir: 'NE' },
+      { tx: cc.tx + (cc.tileW / 2 | 0),   ty: cc.ty + cc.tileH + 3,   label: 'Worker 2', Cls: Worker, dir: 'N'  },
+      { tx: cc.tx + cc.tileW + 1,         ty: cc.ty + cc.tileH + 3,   label: 'Worker 3', Cls: Worker, dir: 'NW' },
+      { tx: bar.tx + bar.tileW + 2,       ty: bar.ty,                  label: 'Marine 1', Cls: Marine, dir: 'W'  },
+      { tx: bar.tx + bar.tileW + 2,       ty: bar.ty + (bar.tileH / 2 | 0), label: 'Marine 2', Cls: Marine, dir: 'SW' },
+      { tx: bar.tx + bar.tileW + 2,       ty: bar.ty + bar.tileH,      label: 'Marine 3', Cls: Marine, dir: 'NW' },
+    ];
+    for (const { tx: targetX, ty: targetY, label, Cls, dir } of unitSpawns) {
+      for (let r = 0; r <= 10; r++) {
+        let placed = false;
+        for (let dy = -r; dy <= r && !placed; dy++) {
+          for (let dx = -r; dx <= r && !placed; dx++) {
             if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
-            const tx = targetX + dx, ty = cy + dy;
+            const tx = targetX + dx, ty = targetY + dy;
             if (this.walkable(tx, ty) && !this._isHill(tx, ty - 1)) {
-              const worker = new Worker(this, tx * TILE + TILE * 0.5, ty * TILE + TILE);
-              this._registerUnit(worker, `Worker ${i + 1}`);
-              return;
+              const unit = new Cls(this, tx * TILE + TILE * 0.5, ty * TILE + TILE);
+              this._registerUnit(unit, label);
+              unit.setDirection(dir);
+              placed = true;
             }
           }
         }
+        if (placed) break;
       }
-    });
+    }
   }
 
   // Make a Unit selectable and give it a Flow-name label above its sprite.
@@ -918,6 +933,7 @@ void main(void){
   // Sync a Unit's sprite + label to its logical {x,y} (feet position), keeping depth = y so
   // it sorts correctly against trees/crystals/other Units.
   _placeUnit(unit) {
+    if (unit._vel) unit.updateDirection(unit._vel.x, unit._vel.y);
     unit.sprite.setPosition(unit.x, unit.y);
     unit.sprite.setDepth(unit.y);
     unit.labelText.setPosition(unit.x, unit.y - TILE - 6);
