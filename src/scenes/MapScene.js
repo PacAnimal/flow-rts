@@ -121,6 +121,7 @@ export class MapScene extends Phaser.Scene {
       adjacentDeposit: (unit) => this._adjacentDeposit(unit),
       collect: (unit, deposit) => this._collect(unit, deposit),
       deliver: (unit) => this._deliver(unit),
+      test: (unit, params) => this._testCondition(unit, params),
     };
 
     this._buildStartButton();
@@ -784,6 +785,29 @@ void main(void){
     const dx = Math.max(cc.tx - ux, ux - (cc.tx + cc.tileW - 1), 0);
     const dy = Math.max(cc.ty - uy, uy - (cc.ty + cc.tileH - 1), 0);
     return Math.max(dx, dy) <= DELIVER_RANGE;
+  }
+
+  // Pure spatial test: is any Deposit on a Tile 8-adjacent to the Unit? (Unlike adjacentDeposit,
+  // ignores whether Cargo is full — a Condition only reports state.)
+  _hasAdjacentDeposit(unit) {
+    const { x: ux, y: uy } = this._unitTile(unit);
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++)
+        if ((dx || dy) && this._depositByTile.has(`${ux + dx},${uy + dy}`)) return true;
+    return false;
+  }
+
+  // World primitive: evaluate a Branch's Condition against Unit/game state (docs/adr/0010).
+  // `params` is the Branch's stored { condition, ...args }. Unknown/unset ⇒ false (No path).
+  _testCondition(unit, params) {
+    switch (params && params.condition) {
+      case 'cargo_full':        return !!unit.cargo && this._cargoRoom(unit, unit.cargo.type) <= 0;
+      case 'cargo_empty':       return !unit.cargo || unit.cargo.amount <= 0;
+      case 'deposit_adjacent':  return this._hasAdjacentDeposit(unit);
+      case 'at_command_center': return this._adjacentToCommandCenter(unit);
+      case 'stockpile_gte':     return (this._stockpile.crystals || 0) >= (params.amount || 0);
+      default:                  return false;
+    }
   }
 
   // ── buildings ─────────────────────────────────────────────────────────────

@@ -54,9 +54,21 @@ _Avoid_: command, task, operation
 **Flow Control**:
 A node kind that directs execution between other nodes (e.g. branch, delay, loop), or
 acts on the Flow system itself — notably a future Assign Flow node that, when executed,
-assigns another Flow to a target Unit. Wait (holds execution for a duration, then continues)
-is the first; branch, loop, and Assign Flow remain reserved in the model.
+assigns another Flow to a target Unit. Wait (holds execution for a duration) and Branch (routes
+to one of two outputs by a Condition) exist; loop and Assign Flow remain reserved in the model.
 _Avoid_: logic node, control node
+
+**Branch**:
+A Flow Control node that evaluates a Condition and sends execution down one of two Exec outputs,
+**Yes** or **No** — the first Node that makes a choice. It evaluates the moment the cursor
+reaches it (it does not wait); if the chosen output has nothing wired, the Run ends there.
+_Avoid_: if, conditional, switch, decision
+
+**Condition**:
+A named boolean test on Unit or game state that a Branch evaluates — e.g. *Cargo full*,
+*Deposit adjacent*, *Stockpile ≥ N*. Chosen from a fixed set; some take an argument (an amount).
+A Condition only reads state to answer true/false; it never changes anything.
+_Avoid_: predicate, check, test, rule, trigger
 
 **Port**:
 A connection point on a node. Every Port is either an Exec port or a Data port, and is

@@ -294,6 +294,20 @@
 }
 .param-input:focus { outline: none; border-color: #5b97e8; background: #314350; }
 
+.param-condition { display: flex; flex-direction: column; gap: 6px; }
+.param-args { display: flex; flex-direction: column; gap: 6px; }
+.param-args:empty { display: none; }
+.param-select {
+  font: 600 11px/1 system-ui, sans-serif;
+  color: #cdd9e0;
+  background: #2b3a44;
+  border: 1px solid #45606e;
+  border-radius: 5px;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+.param-select:focus { outline: none; border-color: #5b97e8; }
+
 /* Position-pick mode banner (shown while picking a Tile on the map) */
 .pick-banner {
   position: fixed;
