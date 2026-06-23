@@ -818,8 +818,8 @@ void main(void){
     const bar = this._barracks;
     // workers below the command center facing it; marines to the right of the barracks facing it
     const unitSpawns = [
-      { tx: cc.tx - 1,                    ty: cc.ty + cc.tileH + 3,   label: 'Worker 1', Cls: Worker, dir: 'NE' },
-      { tx: cc.tx + (cc.tileW / 2 | 0),   ty: cc.ty + cc.tileH + 3,   label: 'Worker 2', Cls: Worker, dir: 'N'  },
+      { tx: cc.tx - 1,                    ty: cc.ty + cc.tileH + 3,   label: 'Worker 1', Cls: Worker, dir: 'S'  },
+      { tx: cc.tx + (cc.tileW / 2 | 0),   ty: cc.ty + cc.tileH + 3,   label: 'Worker 2', Cls: Worker, dir: 'SE' },
       { tx: cc.tx + cc.tileW + 1,         ty: cc.ty + cc.tileH + 3,   label: 'Worker 3', Cls: Worker, dir: 'NW' },
       { tx: bar.tx + bar.tileW + 2,       ty: bar.ty,                  label: 'Marine 1', Cls: Marine, dir: 'W'  },
       { tx: bar.tx + bar.tileW + 2,       ty: bar.ty + (bar.tileH / 2 | 0), label: 'Marine 2', Cls: Marine, dir: 'SW' },
