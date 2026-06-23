@@ -48,26 +48,6 @@ export const DECORATIONS = {
     scale: [1.5, 2.5],
     originY: 1.0,
   },
-  base_mark_open: {
-    id: 'base_mark_open',
-    sprites: MARK_OPEN,
-    w: 1, h: 1,
-    blocking: false,
-    count: 30,
-    clustered: false,
-    scale: [1.5, 2.5],
-    originY: 1.0,
-  },
-  dirt: {
-    id: 'dirt',
-    sprites: DIRT_SPRITES,
-    w: 1, h: 1,
-    blocking: false,
-    count: 80,
-    clustered: false,
-    scale: [1.5, 2.5],
-    originY: 1.0,
-  },
 };
 
 export function getDecoration(id) {

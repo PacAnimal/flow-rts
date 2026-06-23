@@ -74,10 +74,6 @@ export class MapScene extends Phaser.Scene {
       const n = String(i).padStart(2, '0');
       this.load.image(`dirt2_${n}`, `/sprites/decor/dirt2_${n}.png`);
     }
-    this.load.image('gravel',  '/sprites/decor/gravel.png');
-    this.load.image('gravel2', '/sprites/decor/gravel2.png');
-    this.load.image('gravel3', '/sprites/decor/gravel3.png');
-    this.load.image('gravel4', '/sprites/decor/gravel4.png');
   }
 
   create() {
@@ -103,17 +99,13 @@ export class MapScene extends Phaser.Scene {
     const { tiles, isHill, isRamp } = this._generateTerrain();
     this._isHill = isHill;
     this._isRamp = isRamp;
-    this._drawGroundBase();
-    this._drawAlgorithmicNoise();
-    this._drawGravelLayer();
-    this._drawGravel2Layer();
-    this._drawGravel3Layer();
-    this._drawGravel4Layer();
-    this._buildTilemap(tiles);
-    this._spawnBuildings();   // reserve command-center footprint + start clearance first
-    this._placeCrystals();    // clustered crystal Deposits (docs/adr/0009)
-    this._placeDecorations(); // trees, holes — scattered, no overlap (docs/adr/0009)
-    this._spawnUnits();
+    this._drawProceduralGround();
+    const groundOnly = new URLSearchParams(window.location.search).has('groundOnly');
+    if (!groundOnly) this._buildTilemap(tiles);
+    if (!groundOnly) this._spawnBuildings();   // reserve command-center footprint + start clearance first
+    if (!groundOnly) this._placeCrystals();    // clustered crystal Deposits (docs/adr/0009)
+    if (!groundOnly) this._placeDecorations(); // trees, holes — scattered, no overlap (docs/adr/0009)
+    if (!groundOnly) this._spawnUnits();
     this._setupCamera();
     this.input.mouse?.disableContextMenu(); // allow right-click as a cancel gesture
     registerPositionPicker((opts) => this._beginPositionPick(opts));
@@ -180,7 +172,7 @@ export class MapScene extends Phaser.Scene {
     canvas.height = TILE;
     const ctx = canvas.getContext('2d');
 
-    // grass tiles (0-2) are transparent — base ground color comes from _drawGroundBase()
+    // grass tiles (0-2) are transparent — procedural ground shows through
 
     // pre-generate all 16 hill autotile variants
     for (let mask = 0; mask < 16; mask++) {
@@ -416,178 +408,167 @@ export class MapScene extends Phaser.Scene {
     map.createLayer(0, ts, 0, 0).setDepth(-50);
   }
 
-  // ── ground noise system ──────────────────────────────────────────────────────
+  // ── procedural ground ────────────────────────────────────────────────────────
 
-  // Solid base rectangle — everything sits on top of this.
-  _drawGroundBase() {
-    this.add.graphics()
-      .fillStyle(0x000000)
-      .fillRect(0, 0, MAP_W * TILE, MAP_H * TILE)
-      .setDepth(-300);
+  // GPU fragment shader covering the full map in world space.
+  // Camera scroll/zoom are applied automatically by Phaser's projection matrix.
+  //
+  // Techniques:
+  //   Hash:    Dave Hoskins float hash (no sin)
+  //   Warp:    IQ double domain warping for organic shapes
+  //   Voronoi: IQ two-pass perpendicular bisector (uniform crevice width)
+  //   Normal:  finite differences (3 height samples)
+  //   Layers:  large brown rocks → grey sand fill → grey pebbles (3 scales)
+  _drawProceduralGround() {
+    const fragSrc = `
+precision highp float;
+varying vec2 fragCoord;
+uniform vec2 resolution;
+
+float h12(vec2 p){
+  vec3 q=fract(vec3(p.xyx)*0.1031);q+=dot(q,q.yzx+33.33);
+  return fract((q.x+q.y)*q.z);
+}
+vec2 h22(vec2 p){
+  vec3 q=fract(vec3(p.xyx)*vec3(0.1031,0.1030,0.0973));q+=dot(q,q.yzx+33.33);
+  return fract((q.xx+q.yz)*q.zy);
+}
+float vn(vec2 p){
+  vec2 i=floor(p);vec2 f=fract(p);
+  vec2 u=f*f*f*(f*(f*6.0-15.0)+10.0);
+  return mix(mix(h12(i),h12(i+vec2(1,0)),u.x),
+             mix(h12(i+vec2(0,1)),h12(i+vec2(1,1)),u.x),u.y);
+}
+float fbm(vec2 p){
+  float v=0.0,a=0.5;
+  for(int i=0;i<4;i++){v+=a*vn(p);p*=2.0;a*=0.5;}
+  return v/0.9375;
+}
+// 3-octave cheap fbm for large-scale fields (biomes, macro, lava zones)
+float fbmL(vec2 p){
+  float v=0.0,a=0.5;
+  for(int i=0;i<3;i++){v+=a*vn(p);p*=2.0;a*=0.5;}
+  return v/0.875;
+}
+float voronoiEdge(vec2 x,out float cellId){
+  vec2 p=floor(x);vec2 f=fract(x);
+  vec2 mr=vec2(0);vec2 mb=vec2(0);float minD=9.0;
+  for(int j=-1;j<=1;j++) for(int i=-1;i<=1;i++){
+    vec2 b=vec2(float(i),float(j));
+    vec2 r=b+h22(p+b)-f;
+    float d=dot(r,r);
+    if(d<minD){minD=d;mr=r;mb=b;}
   }
-
-  // Ground noise: 640×640 tiles at 50% overlap with Hann window alpha (sin²×sin²).
-  // ADD blend mode on a black base gives an exact partition of unity — at every world
-  // pixel the 4 overlapping tiles' Hann weights sum to 1, so there are no seams and
-  // no base colour bleed.  4 unique seeded variants break up the periodic repetition.
-  _drawAlgorithmicNoise() {
-    const SIZE   = 640;
-    const STRIDE = SIZE >> 1;  // 320 — 50% overlap gives Hann partition of unity
-
-    const makeGrid = (G, rng) => {
-      const ng = new Float32Array((G + 1) * (G + 1));
-      for (let y = 0; y < G; y++)
-        for (let x = 0; x < G; x++)
-          ng[y * (G + 1) + x] = rng();
-      for (let y = 0; y <= G; y++) ng[y * (G + 1) + G] = ng[(y % G) * (G + 1)];
-      for (let x = 0; x <= G; x++) ng[G * (G + 1) + x] = ng[x % G];
-      return ng;
-    };
-
-    const sample = (ng, G, nx, ny) => {
-      const gx = nx * G, gy = ny * G;
-      const x0 = Math.min(G - 1, gx | 0), y0 = Math.min(G - 1, gy | 0);
-      const x1 = x0 + 1, y1 = y0 + 1;
-      const fx = gx - x0, fy = gy - y0;
-      const s  = t => t * t * (3 - 2 * t);
-      const sfx = s(fx), sfy = s(fy);
-      return ng[y0*(G+1)+x0]*(1-sfx)*(1-sfy)
-           + ng[y0*(G+1)+x1]*sfx*(1-sfy)
-           + ng[y1*(G+1)+x0]*(1-sfx)*sfy
-           + ng[y1*(G+1)+x1]*sfx*sfy;
-    };
-
-    const mkTex = (seed) => {
-      const cvs  = document.createElement('canvas');
-      cvs.width  = cvs.height = SIZE;
-      const ctx  = cvs.getContext('2d', { willReadFrequently: true });
-      const imgd = ctx.getImageData(0, 0, SIZE, SIZE);
-      const d    = imgd.data;
-      const rng  = mkRNG(seed);
-      // 4 octaves: 40px → 20px → 10px → 5px grain — no coarse blobs that look cloudy
-      const octaves = [[16, 0.25], [32, 0.30], [64, 0.30], [128, 0.15]]
-        .map(([G, w]) => ({ G, w, ng: makeGrid(G, rng) }));
-      for (let y = 0; y < SIZE; y++) {
-        // sample at pixel centre (+0.5) for exact discrete partition of unity
-        const ay = Math.sin(Math.PI * (y + 0.5) / SIZE);
-        for (let x = 0; x < SIZE; x++) {
-          let n = 0;
-          for (const { G, w, ng } of octaves) n += sample(ng, G, x / SIZE, y / SIZE) * w;
-          const v  = Math.round((n - 0.5) * 50);
-          const ax = Math.sin(Math.PI * (x + 0.5) / SIZE);
-          const i  = (y * SIZE + x) * 4;
-          d[i]   = Math.max(0, Math.min(255, 56 + v));
-          d[i+1] = Math.max(0, Math.min(255, 36 + Math.round(v * 0.55)));
-          d[i+2] = Math.max(0, Math.min(255, 32 + Math.round(v * 0.65)));
-          d[i+3] = Math.round(ax * ax * ay * ay * 255);
-        }
-      }
-      ctx.putImageData(imgd, 0, 0);
-      return cvs;
-    };
-
-    const keys = [99887, 31415, 27182, 16180].map((seed, i) => {
-      const key = `_gnd_noise_${i}`;
-      this.textures.addCanvas(key, mkTex(seed));
-      return key;
-    });
-
-    // collect placements, sort by texture for max WebGL batching (ADD is commutative so order is irrelevant visually)
-    const rng   = mkRNG(44556);
-    const tiles = [];
-    for (let ty = -1; ty * STRIDE < MAP_H * TILE; ty++)
-      for (let tx = -1; tx * STRIDE < MAP_W * TILE; tx++)
-        tiles.push({ tx, ty, key: keys[(rng() * 4) | 0] });
-    tiles.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
-
-    for (const { tx, ty, key } of tiles)
-      this.add.image(tx * STRIDE, ty * STRIDE, key)
-        .setOrigin(0, 0)
-        .setBlendMode(Phaser.BlendModes.ADD)
-        .setDepth(-200);
+  cellId=h12(p+mb);
+  float edgeD=9.0;
+  for(int j=-2;j<=2;j++) for(int i=-2;i<=2;i++){
+    vec2 b=mb+vec2(float(i),float(j));
+    vec2 r=b+h22(p+b)-f;
+    vec2 dv=r-mr;
+    if(dot(dv,dv)>0.0001)
+      edgeD=min(edgeD,dot(0.5*(mr+r),normalize(dv)));
   }
+  return edgeD;
+}
 
-  // Scatter gravel.png instances across the map: grid + jitter + random rotation.
-  // The texture is already 88% transparent (sparse pebbles); overlapping instances
-  // give natural coverage without any additional alpha mask needed.
-  _drawGravelLayer() {
-    // gravel.png is 1254×1254 — scale down for fine detail, pack tightly for density
-    const SCALE  = 0.28;
-    const STEP   = 150;
-    const JITTER = 45;
-    const rng    = mkRNG(33221);
-    for (let gy = 0; gy < MAP_H * TILE; gy += STEP) {
-      for (let gx = 0; gx < MAP_W * TILE; gx += STEP) {
-        const px = gx + (rng() - 0.5) * 2 * JITTER;
-        const py = gy + (rng() - 0.5) * 2 * JITTER;
-        this.add.image(px, py, 'gravel')
-          .setScale(SCALE)
-          .setRotation(rng() * Math.PI * 2)
-          .setAlpha(0.4)
-          .setBlendMode(Phaser.BlendModes.ADD)
-          .setDepth(-150);
-      }
-    }
-  }
+void main(void){
+  vec2 world=vec2(fragCoord.x, resolution.y-fragCoord.y);
+  vec2 p=world/6.0;
 
-  // gravel2 scattered on top of gravel (-140), different seed/step for visual variety
-  _drawGravel2Layer() {
-    const SCALE  = 0.28;
-    const STEP   = 170;
-    const JITTER = 55;
-    const rng    = mkRNG(78901);
-    for (let gy = 0; gy < MAP_H * TILE; gy += STEP) {
-      for (let gx = 0; gx < MAP_W * TILE; gx += STEP) {
-        const px = gx + (rng() - 0.5) * 2 * JITTER;
-        const py = gy + (rng() - 0.5) * 2 * JITTER;
-        this.add.image(px, py, 'gravel2')
-          .setScale(SCALE)
-          .setRotation(rng() * Math.PI * 2)
-          .setAlpha(0.4)
-          .setBlendMode(Phaser.BlendModes.ADD)
-          .setDepth(-140);
-      }
-    }
-  }
+  // macro elevation — large regional brightness variation
+  float macro=fbmL(p*0.10+vec2(4.5,1.2));
 
-  // gravel3 scattered on top of gravel2 (-130), distinct seed/step
-  _drawGravel3Layer() {
-    const SCALE  = 0.28;
-    const STEP   = 190;
-    const JITTER = 60;
-    const rng    = mkRNG(56789);
-    for (let gy = 0; gy < MAP_H * TILE; gy += STEP) {
-      for (let gx = 0; gx < MAP_W * TILE; gx += STEP) {
-        const px = gx + (rng() - 0.5) * 2 * JITTER;
-        const py = gy + (rng() - 0.5) * 2 * JITTER;
-        this.add.image(px, py, 'gravel3')
-          .setScale(SCALE)
-          .setRotation(rng() * Math.PI * 2)
-          .setAlpha(0.4)
-          .setBlendMode(Phaser.BlendModes.ADD)
-          .setDepth(-130);
-      }
-    }
-  }
+  // terrain biomes: rocky (default), dusty flat sheets, charred gashes
+  float dustN=fbmL(p*0.038+vec2(2.2,5.8));
+  float charN=fbmL(p*0.072+vec2(8.4,3.1));
+  float wDusty=smoothstep(0.38,0.62,dustN);
+  float wCharred=smoothstep(0.65,0.82,charN)*(1.0-wDusty);
+  float wRocky=max(0.0,1.0-wDusty-wCharred);
 
-  // gravel4 scattered on top of gravel3 (-120), tighter step for fine surface detail
-  _drawGravel4Layer() {
-    const SCALE  = 0.28;
-    const STEP   = 130;
-    const JITTER = 40;
-    const rng    = mkRNG(13579);
-    for (let gy = 0; gy < MAP_H * TILE; gy += STEP) {
-      for (let gx = 0; gx < MAP_W * TILE; gx += STEP) {
-        const px = gx + (rng() - 0.5) * 2 * JITTER;
-        const py = gy + (rng() - 0.5) * 2 * JITTER;
-        this.add.image(px, py, 'gravel4')
-          .setScale(SCALE)
-          .setRotation(rng() * Math.PI * 2)
-          .setAlpha(0.35)
-          .setBlendMode(Phaser.BlendModes.ADD)
-          .setDepth(-120);
-      }
-    }
+  // lava hot zones: large rare spatial clusters, only in rocky biome
+  float lavaTend=fbmL(p*0.025+vec2(7.1,3.4));
+  float lavaZone=smoothstep(0.72,0.86,lavaTend)*wRocky;
+
+  // domain warp for organic crack shapes
+  vec2 q=vec2(fbm(p),fbm(p+vec2(5.2,1.3)));
+  vec2 wp=p+0.50*q;
+  vec2 rv=vec2(fbm(wp*1.9+vec2(1.7,9.2)),fbm(wp*1.9+vec2(8.3,2.8)));
+  wp+=0.22*rv;
+
+  // primary cracks — width varies by biome and macro
+  float c1;
+  float e1=voronoiEdge(wp*0.38,c1);
+  float crackW=mix(0.05+0.14*(1.0-macro),0.050,wDusty);
+  crackW=mix(crackW,0.038,wCharred);
+  float crackMask=1.0-smoothstep(0.0,crackW,e1);
+  float ao=0.60+0.40*smoothstep(0.0,crackW*2.5,e1);
+
+  // secondary cracks — dense in charred terrain, sparse in dust
+  float c2;
+  float e2=voronoiEdge(wp*1.3+vec2(5.3,2.7),c2);
+  float fineCrack=1.0-smoothstep(0.0,0.055,e2);
+  float fineCrackStr=0.35*wRocky+0.18*wDusty+0.68*wCharred;
+
+  // bump normals: tall lumpy rock, flat dust sheets, medium char
+  float bumpAmp=(6.0+10.0*macro)*wRocky+1.5*wDusty+3.5*wCharred;
+  float g0=fbm(wp*2.0+vec2(1.1,0.7));
+  float ep=0.34;
+  float gnx=fbm(wp*2.0+vec2(1.1+ep,0.7))-g0;
+  float gny=fbm(wp*2.0+vec2(1.1,0.7+ep))-g0;
+  vec3 N=normalize(vec3(gnx*bumpAmp,gny*bumpAmp,1.0));
+
+  float grain=fbm(wp*6.0+vec2(3.3,7.1));
+  float finegrain=fbm(wp*13.0+vec2(6.6,2.4));
+  float noise=grain*0.60+finegrain*0.40;
+
+  vec3 L1=normalize(vec3(0.70,0.0,0.71));
+  vec3 L2=normalize(vec3(0.0,0.70,0.71));
+  float diff=max(max(0.0,dot(N,L1)),max(0.0,dot(N,L2)));
+
+  float rv2=h12(floor(wp*0.38)+vec2(3.1,7.9));
+  float cv=c1*0.010;
+
+  // biome surface colors
+  vec3 rockBase=vec3(0.330+cv*0.4,0.278+cv*0.32,0.228+cv*0.26)*(0.88+0.24*rv2);
+  vec3 rockCrev=vec3(0.110+cv*0.18,0.078+cv*0.13,0.055+cv*0.10);
+  vec3 dustBase=vec3(0.380+cv*0.25,0.365+cv*0.22,0.342+cv*0.18)*(0.90+0.18*rv2);
+  vec3 dustCrev=vec3(0.130,0.122,0.108);
+  vec3 charBase=vec3(0.188+cv*0.18,0.168+cv*0.15,0.155+cv*0.12)*(0.85+0.28*rv2);
+  vec3 charCrev=vec3(0.078,0.060,0.050);
+
+  vec3 rockCol=wRocky*rockBase+wDusty*dustBase+wCharred*charBase;
+  // crevice color gets grain modulation for textured crack appearance
+  vec3 crevCol=(wRocky*rockCrev+wDusty*dustCrev+wCharred*charCrev)*(0.60+0.80*grain);
+  float surfNoiseStr=0.42*wRocky+0.20*wDusty+0.50*wCharred;
+
+  vec3 col=mix(rockCol,crevCol,crackMask);
+  col*=ao;
+  col*=(1.0-fineCrack*fineCrackStr);
+  col*=(1.0-surfNoiseStr+2.0*surfNoiseStr*noise);
+  col*=(0.46+0.54*diff);
+  col*=(0.55+0.68*macro);
+
+  // lava: additive emissive inside crack channels, tiny heat aura just outside
+  // lavaActive clusters within hot zones (not uniform per-cell probability)
+  float lavaSeed=h12(floor(wp*0.38)+vec2(9.3,2.8));
+  float lavaActive=step(0.70,lavaSeed)*lavaZone;
+  float lavaHeat=crackMask*crackMask;
+  float lavaAura=max(0.0,1.0-e1/0.18)*(1.0-crackMask)*0.15;
+  col+=vec3(1.20,0.62,0.02)*lavaHeat*lavaActive;
+  col+=vec3(0.70,0.08,0.00)*lavaAura*lavaActive;
+
+  col=max(col,vec3(0.032,0.022,0.016));
+  gl_FragColor=vec4(col,1.0);
+}
+`;
+
+    const base = new Phaser.Display.BaseShader('_gnd_shader', fragSrc, undefined, {});
+    this.cache.shader.add('_gnd_shader', base);
+
+    // world-space object: camera scroll/zoom move it naturally like any other sprite
+    this._groundShader = this.add.shader('_gnd_shader', 0, 0, MAP_W * TILE, MAP_H * TILE)
+      .setOrigin(0, 0)
+      .setDepth(-200);
   }
 
   // ── occupancy (docs/adr/0009) ───────────────────────────────────────────────
@@ -1029,7 +1010,7 @@ export class MapScene extends Phaser.Scene {
     });
 
     this.input.on('wheel', (_p, _objs, _dx, deltaY) => {
-      cam.setZoom(Phaser.Math.Clamp(cam.zoom - deltaY * 0.001, 0.25, 8));
+      cam.setZoom(Phaser.Math.Clamp(cam.zoom - deltaY * 0.001, 0.25, 2));
     });
 
     this.game.canvas.style.cursor = 'grab';

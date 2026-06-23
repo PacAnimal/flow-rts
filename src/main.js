@@ -5,7 +5,7 @@ import { flowLibrary } from './flow/library.js';
 
 new Phaser.Game({
   type: Phaser.AUTO,
-  backgroundColor: '#2e6620',
+  backgroundColor: '#0a0806',
   scene: [MapScene],
   scale: {
     mode: Phaser.Scale.RESIZE,
