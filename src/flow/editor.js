@@ -5,8 +5,9 @@
 // camera-drag with no extra coordination. See CONTEXT.md and docs/adr/0001.
 
 import './editor.css';
-import { NODE_KINDS, getNodeKind, getParams } from './nodeKinds.js';
+import { getNodeKind, getParams, nodeKindsForRunner } from './nodeKinds.js';
 import { CONDITIONS, getCondition } from '../conditions.js';
+import { UNIT_TYPES } from '../units.js';
 import { pickPosition } from './positionPicker.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -66,24 +67,24 @@ export class FlowEditor {
     const libPanel = el('div', 'flow-library');
     const libHead = el('div', 'lib-head');
     libHead.appendChild(el('h2', null, 'Flow Library'));
-    const newBtn = el('button', 'lib-new', '+ New Flow');
-    newBtn.addEventListener('click', () => this._newFlow());
-    libHead.appendChild(newBtn);
+    // A Flow is typed by Runner kind (docs/adr/0015) — create one or the other explicitly.
+    const newUnit = el('button', 'lib-new', '+ Unit');
+    newUnit.addEventListener('click', () => this._newFlow('unit'));
+    libHead.appendChild(newUnit);
+    const newBuilding = el('button', 'lib-new', '+ Building');
+    newBuilding.addEventListener('click', () => this._newFlow('building'));
+    libHead.appendChild(newBuilding);
     libPanel.appendChild(libHead);
     this.libList = el('div', 'lib-list');
     libPanel.appendChild(this.libList);
     libPanel.appendChild(el('p', 'palette-hint', 'Double-click a name to rename.'));
 
-    // Palette — node kinds to drag onto the canvas.
+    // Palette — node kinds to drag onto the canvas. Filtered to the edited Flow's Runner kind
+    // (docs/adr/0015), so it is rebuilt by _renderPalette whenever the Flow changes.
     const palette = el('div', 'flow-palette');
     palette.appendChild(el('h2', null, 'Nodes'));
-    for (const k of Object.values(NODE_KINDS)) {
-      const item = el('div', `palette-item category-${k.category}`);
-      item.appendChild(el('span', 'palette-title', k.title));
-      item.appendChild(el('span', 'palette-tag', k.category));
-      item.addEventListener('pointerdown', (e) => this._startPaletteDrag(e, k.kind));
-      palette.appendChild(item);
-    }
+    this.paletteList = el('div', 'palette-list');
+    palette.appendChild(this.paletteList);
     palette.appendChild(el('p', 'palette-hint', 'Drag a node onto the canvas. Drag port → port to connect.'));
 
     // Canvas + wire layer
@@ -106,11 +107,25 @@ export class FlowEditor {
 
   // ── library ──────────────────────────────────────────────────────────────
 
-  _newFlow() {
-    const entry = this.library.create();
+  _newFlow(targetKind = 'unit') {
+    const entry = this.library.create(undefined, targetKind);
     this.library.save();
     this.setFlow(entry.id);
     this._renderLibrary();
+  }
+
+  // Rebuild the palette to show only the nodes valid for the current Flow's Runner kind.
+  _renderPalette() {
+    if (!this.paletteList) return;
+    this.paletteList.replaceChildren();
+    const targetKind = (this.model && this.model.targetKind) || 'unit';
+    for (const k of nodeKindsForRunner(targetKind)) {
+      const item = el('div', `palette-item category-${k.category}`);
+      item.appendChild(el('span', 'palette-title', k.title));
+      item.appendChild(el('span', 'palette-tag', k.category));
+      item.addEventListener('pointerdown', (e) => this._startPaletteDrag(e, k.kind));
+      this.paletteList.appendChild(item);
+    }
   }
 
   _renderLibrary() {
@@ -122,6 +137,7 @@ export class FlowEditor {
       name.title = 'Double-click to rename';
       name.addEventListener('dblclick', () => this._renameFlow(entry.id, name));
       row.appendChild(name);
+      row.appendChild(el('span', `lib-kind kind-${entry.model.targetKind}`, entry.model.targetKind));
       const count = entry.model.nodes.length;
       row.appendChild(el('span', 'lib-count', `${count} node${count === 1 ? '' : 's'}`));
       row.addEventListener('click', () => { if (entry.id !== this.currentId) this.setFlow(entry.id); });
@@ -154,7 +170,8 @@ export class FlowEditor {
     if (!entry) return;
     this.currentId = id;
     this.model = entry.model;
-    this.flowName.textContent = entry.name;
+    this.flowName.textContent = `${entry.name}  ·  ${entry.model.targetKind} flow`;
+    this._renderPalette();
     this._renderAll();
     this._renderLibrary();
   }
@@ -232,11 +249,40 @@ export class FlowEditor {
   // opens the in-world picker; a 'number' is edited inline. Either may be unset.
   _buildParamRow(node, param) {
     if (param.type === 'condition') return this._conditionParam(node, param);
+    if (param.type === 'unitType')
+      return this._selectParam(node, param, Object.values(UNIT_TYPES).map((u) => ({ value: u.id, label: u.label })));
+    if (param.type === 'flowRef')
+      return this._selectParam(node, param, this._unitFlowOptions());
     const row = el('div', 'param-row');
     row.appendChild(el('span', 'param-label', param.label));
     row.appendChild(
       param.type === 'number' ? this._numberInput(node, param) : this._tileButton(node, param),
     );
+    return row;
+  }
+
+  // Library Flows that can be assigned to a produced Unit (Unit-Flows) — for Train's 'assignFlow'.
+  _unitFlowOptions() {
+    return this.library.list()
+      .filter((e) => (e.model.targetKind || 'unit') === 'unit')
+      .map((e) => ({ value: e.id, label: e.name }));
+  }
+
+  // A generic dropdown Parameter: stores the chosen option's value in node.params (ADR-0004).
+  // Used by 'unitType' (what to build) and 'flowRef' (the Flow a Train assigns to its product).
+  _selectParam(node, param, options) {
+    const row = el('div', 'param-row');
+    row.appendChild(el('span', 'param-label', param.label));
+    const select = el('select', 'param-select');
+    select.appendChild(el('option', null, '—')).value = '';
+    for (const o of options) select.appendChild(el('option', null, o.label)).value = o.value;
+    select.value = (node.params && node.params[param.id]) || '';
+    select.addEventListener('pointerdown', (e) => e.stopPropagation());
+    select.addEventListener('change', () => {
+      this.model.setParam(node.id, param.id, select.value || null);
+      this.library.save();
+    });
+    row.appendChild(select);
     return row;
   }
 

@@ -18,7 +18,10 @@ function bumpSeqFrom(ids) {
 }
 
 export class FlowModel {
-  constructor() {
+  // `targetKind` is the Runner kind this Flow controls (docs/adr/0015): 'unit' or 'building'.
+  // It fixes which Actions the palette offers and which Runners it can be assigned to.
+  constructor(targetKind = 'unit') {
+    this.targetKind = targetKind;
     /** @type {Array<{id:string, kind:string, x:number, y:number}>} */
     this.nodes = [];
     /** @type {Array<{id:string, from:{node:string,port:string}, to:{node:string,port:string}}>} */
@@ -100,6 +103,7 @@ export class FlowModel {
 
   toJSON() {
     return {
+      targetKind: this.targetKind,
       nodes: this.nodes.map((n) => ({ ...n })),
       connections: this.connections.map((c) => ({
         id: c.id,
@@ -110,7 +114,7 @@ export class FlowModel {
   }
 
   static fromJSON(data) {
-    const m = new FlowModel();
+    const m = new FlowModel(data?.targetKind || 'unit');
     m.nodes = (data?.nodes ?? []).map((n) => ({
       id: n.id, kind: n.kind, x: n.x, y: n.y,
       params: n.params ? { ...n.params } : {},

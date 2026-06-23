@@ -25,9 +25,10 @@ function close() {
   if (overlay) overlay.classList.add('hidden');
 }
 
-// Open the assign overlay for `unit`. `onAssigned(unit)` is called after a change so the
-// caller can refresh any on-map label. `unit.label` (optional) is shown as the title.
-export function openAssignOverlay(unit, library, onAssigned) {
+// Open the assign overlay for a `runner` (Unit or Building). Only Flows whose targetKind matches
+// `targetKind` are offered (docs/adr/0015). `onAssigned(runner)` is called after a change so the
+// caller can refresh any on-map label. `runner.label` (optional) is shown as the title.
+export function openAssignOverlay(unit, library, targetKind, onAssigned) {
   ensureDom();
   panel.replaceChildren();
 
@@ -53,11 +54,12 @@ export function openAssignOverlay(unit, library, onAssigned) {
   };
 
   addRow(null, 'None (clear)', true);
-  const flows = library.list();
+  // A Building-Flow cannot be assigned to a Unit and vice versa; legacy Flows default to 'unit'.
+  const flows = library.list().filter((e) => (e.model.targetKind || 'unit') === targetKind);
   if (flows.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'assign-empty';
-    empty.textContent = 'No Flows yet. Open the Flow editor (F) to create one.';
+    empty.textContent = `No ${targetKind} Flows yet. Open the Flow editor (F) to create one.`;
     list.appendChild(empty);
   } else {
     for (const entry of flows) addRow(entry.id, entry.name);

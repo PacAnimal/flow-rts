@@ -52,6 +52,16 @@ export class MovementSystem {
     return !!(unit.mv && unit.mv.arrived);
   }
 
+  // Stop a Unit in place: drop its Path and clear its goal so steering no longer seeks (the
+  // separation pass still applies). Used by the combat layer when a Unit halts to attack.
+  stop(unit) {
+    const mv = this._mv(unit);
+    mv.path = null;
+    mv.arrived = true;
+    mv.goalTx = null;
+    mv.goalTy = null;
+  }
+
   // Advance every Unit one frame. `dt` is in ms (Phaser delta).
   update(units, dt) {
     const s = dt / 1000;
@@ -73,9 +83,13 @@ export class MovementSystem {
       const mv = unit.mv;
       if (mv && mv.path && !mv.arrived) {
         const goal = mv.path[mv.path.length - 1];
+        // Suspend the stuck-timer while attacking (docs/adr/0012): a Unit fighting near its goal
+        // must not falsely "arrive" mid-fight.
+        const engaged = unit.combat && unit.combat.engaged;
+        const stuckThresh = (unit.speed ?? SPEED) * 0.12 * s;
         if (dist(unit.x, unit.y, goal.x, goal.y) <= ARRIVE) mv.arrived = true;
-        else if (moved < (unit.speed ?? SPEED) * 0.12 * s) { if ((mv.stuck += dt) > STUCK_MS) mv.arrived = true; }
-        else mv.stuck = 0;
+        else if (moved < stuckThresh && !engaged) { if ((mv.stuck += dt) > STUCK_MS) mv.arrived = true; }
+        else if (!engaged) mv.stuck = 0;
       }
     }
 

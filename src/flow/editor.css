@@ -53,6 +53,37 @@
   border-radius: 6px;
 }
 
+/* Objective banner (docs/adr/0014): centred win/lose card over the map. */
+.level-banner {
+  position: fixed;
+  top: 38%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1200;
+  padding: 18px 38px;
+  font: 800 28px/1 system-ui, sans-serif;
+  letter-spacing: 0.04em;
+  color: #fff;
+  border-radius: 10px;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+.level-banner.hidden { display: none; }
+.level-banner.win  { background: rgba(34, 110, 58, 0.94); }
+.level-banner.lose { background: rgba(150, 40, 40, 0.94); }
+
+/* Flow-kind tag in the Library list (docs/adr/0015). */
+.lib-kind {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 6px;
+}
+.lib-kind.kind-unit     { background: #2c4a5e; color: #bfe3ff; }
+.lib-kind.kind-building { background: #4a3b2c; color: #ffdcb0; }
+
 .flow-editor {
   position: fixed;
   inset: 0;

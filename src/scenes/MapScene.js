@@ -19,9 +19,22 @@ import { startRun, tickRun } from '../flow/runtime.js';
 import { MovementSystem } from '../movement.js';
 import { getResource, RESOURCES } from '../resources.js';
 import { DECORATIONS } from '../decorations.js';
+import { FACTION, getUnitType, getBuildingType } from '../units.js';
+import { applyDamage } from '../entities/runner.js';
+import { CombatSystem } from '../combat.js';
+import { SCENARIO, enemyFlowModel } from '../scenario.js';
 import '../flow/editor.css'; // shared overlay chrome — styles the Start/Pause button
 const MAP_W = 120;
 const MAP_H = 90;
+
+// Unit type id → class, for spawning produced/Enemy Units by type (docs/adr/0013, 0014).
+const UNIT_CLASS = { worker: Worker, marine: Marine };
+
+// Shared label style for the text above every Unit.
+const LABEL_STYLE = {
+  fontFamily: 'system-ui, sans-serif', fontSize: '13px', color: '#ffffff',
+  backgroundColor: 'rgba(0,0,0,0.55)', padding: { x: 5, y: 2 },
+};
 
 // Tiles kept clear of crystals/decorations around the command center, beyond its footprint,
 // so the start area stays open (docs/adr/0009).
@@ -90,6 +103,14 @@ export class MapScene extends Phaser.Scene {
     // its Cargo at the command center. Shown in the materials panel.
     this._stockpile = {};
 
+    // Buildings are Runners too (CONTEXT.md): they hold Assignments and Runs and are ticked
+    // alongside Units. Enemy Flows are data-authored and live here, out of the Library (ADR-0011).
+    this.buildings = [];
+    this._enemyFlows = new Map(); // flowId → FlowModel for spawned Enemies
+    this._over = false;           // set once the Objective resolves (win/lose)
+    this._enemySeq = 0;
+    this._assignments = this._loadAssignments(); // { [runner.label]: flowId }, shared by buildings + units
+
     this._makeTileset();
     const { tiles, isHill, isRamp } = this._generateTerrain();
     this._isHill = isHill;
@@ -113,12 +134,23 @@ export class MapScene extends Phaser.Scene {
       height: MAP_H,
     });
 
+    // Combat layer (docs/adr/0012): acquires targets, drives chase/stop goals into the movement
+    // system, and applies Damage. Engine-agnostic like movement — it reaches the game by callback.
+    this._combat = new CombatSystem({
+      targetsFor: (unit) => this._targetsFor(unit),
+      onAttack: (attacker, target) => this._applyDamage(target, getUnitType(attacker.type)?.damage || 0),
+      movement: this._movement,
+    });
+
     // The world context handed to the Flow interpreter: the only surface through which a
     // node's effect reaches the game (docs/adr/0006). The interpreter has no Phaser; these
     // primitives do. Move sets a goal and reads whether the Unit has arrived; the actual
     // pathing/steering runs in update()'s movement pass.
     this._world = {
       moveToward: (unit, destTile) => {
+        // A plain Move ends any combat stance (docs/adr/0012): otherwise the combat pass would
+        // keep stopping the Unit to fight and it could never leave its post.
+        if (unit.combat) unit.combat = null;
         this._movement.setGoal(unit, destTile.x, destTile.y);
         return this._movement.arrived(unit);
       },
@@ -128,26 +160,273 @@ export class MapScene extends Phaser.Scene {
       collect: (unit, deposit) => this._collect(unit, deposit),
       deliver: (unit) => this._deliver(unit),
       test: (unit, params) => this._testCondition(unit, params),
+      // Combat (docs/adr/0012): the executors set a combat intent; the CombatSystem resolves it.
+      attackMove: (unit, dest) => this._setCombat(unit, 'attackmove', dest),
+      hold: (unit) => this._setCombat(unit, 'hold', null),
+      attackMoveArrived: (unit) => this._movement.arrived(unit) && !(unit.combat && unit.combat.engaged),
+      // Production (docs/adr/0013): a building-scoped Action ticked on a Building Runner.
+      train: (building, params, state, dt) => this._train(building, params, state, dt),
     };
 
+    this._scenarioState = { time: 0, next: 0 }; // wave-clock cursor (docs/adr/0014)
     this._buildStartButton();
     this._buildMaterialsPanel();
+    this._buildBanner();
   }
 
   // Per-frame loop (docs/adr/0005, 0007): while running, tick every Run (a running Move sets
   // its goal), then integrate movement for all Units at once (so idle Units also get shoved),
   // then sync sprites. Paused ⇒ nothing ticks and nothing moves.
   update(_time, delta) {
-    if (!this.units || !this._running) return;
-    for (const unit of this.units) {
-      const run = unit.run;
-      if (!run || run.status !== 'running') continue;
-      const entry = flowLibrary.get(run.flowId);
-      if (!entry) { run.status = 'halted'; continue; }
-      tickRun(run, unit, entry.model, this._world, delta);
-    }
+    if (!this.units || !this._running || this._over) return;
+
+    // Tick every Runner's Run — Units and Buildings alike (CONTEXT.md Runner). Buildings run
+    // building-scoped Flows (Train); Units run movement/gather/combat Flows.
+    for (const runner of this._runners()) this._tickRunner(runner, delta);
+
+    // Combat resolves before movement so an engaging Unit holds its ground (docs/adr/0012),
+    // then the movement pass integrates positions, then the Scenario advances its wave clock.
+    this._combat.update(this.units, delta);
     this._movement.update(this.units, delta);
+    this._updateScenario(delta);
+
     for (const unit of this.units) this._placeUnit(unit);
+    for (const b of this.buildings) b.syncHealthBar();
+    this._checkObjective();
+  }
+
+  // Every Runner currently on the map (Units + Buildings). Enemy Units are in `this.units`.
+  _runners() { return [...this.units, ...this.buildings]; }
+
+  // Advance one Runner's Run against its live Flow model. Player Flows resolve from the Library;
+  // Enemy Flows are data-authored and resolve from the Scenario's registry (docs/adr/0011, 0014).
+  _tickRunner(runner, delta) {
+    const run = runner.run;
+    if (!run || run.status !== 'running') return;
+    const model = this._resolveFlow(run.flowId);
+    if (!model) { run.status = 'halted'; return; }
+    tickRun(run, runner, model, this._world, delta);
+  }
+
+  _resolveFlow(flowId) {
+    const entry = flowLibrary.get(flowId);
+    if (entry) return entry.model;
+    return this._enemyFlows.get(flowId) || null;
+  }
+
+  // ── combat & death (docs/adr/0012) ───────────────────────────────────────────
+
+  // Apply Damage to a Runner; if it dies, remove it. The Command Center falling ends the level.
+  _applyDamage(target, amount) {
+    if (!target || target.health <= 0) return;
+    const died = applyDamage(target, amount);
+    target.syncHealthBar();
+    if (died) this._destroyRunner(target);
+  }
+
+  _destroyRunner(runner) {
+    runner._healthBar?.destroy();
+    runner.sprite?.destroy();
+    if (runner.labelText) runner.labelText.destroy();
+    runner.run = null;
+
+    if (this.units.includes(runner)) {
+      this.units = this.units.filter((u) => u !== runner);
+    } else if (this.buildings.includes(runner)) {
+      // Free the Building's Footprint so Units can path/stand there (docs/adr/0009).
+      for (let dy = 0; dy < runner.tileH; dy++)
+        for (let dx = 0; dx < runner.tileW; dx++)
+          this._occupied.delete(`${runner.tx + dx},${runner.ty + dy}`);
+      this.buildings = this.buildings.filter((b) => b !== runner);
+      if (runner === this._commandCenter) this._endLevel(false); // base lost ⇒ defeat
+    }
+  }
+
+  // Enemy targets for a Unit: every alive Runner of the opposing Faction, as a point + radius
+  // the CombatSystem range-checks against (docs/adr/0012).
+  _targetsFor(unit) {
+    const out = [];
+    for (const u of this.units)
+      if (u !== unit && u.faction !== unit.faction && u.health > 0)
+        out.push({ entity: u, x: u.x, y: u.y - TILE * 0.4, radius: TILE * 0.3 });
+    for (const b of this.buildings)
+      if (b.faction !== unit.faction && b.health > 0)
+        out.push({
+          entity: b,
+          x: (b.tx + b.tileW * 0.5) * TILE,
+          y: (b.ty + b.tileH * 0.5) * TILE,
+          radius: b.tileW * TILE * 0.5,
+        });
+    return out;
+  }
+
+  // Set/refresh a Unit's combat intent (docs/adr/0012). Re-issuing the same intent preserves the
+  // attack cooldown; a genuinely new intent (mode or Attack-Move destination changed) resets it.
+  _setCombat(unit, mode, dest) {
+    const c = unit.combat;
+    const sameDest = !dest || (c && c.dest && c.dest.x === dest.x && c.dest.y === dest.y);
+    if (!c || c.mode !== mode || (mode === 'attackmove' && !sameDest)) {
+      unit.combat = { mode, dest: dest ? { ...dest } : null, cooldown: 0, engaged: false };
+      // Kick off travel immediately so the Attack-Move executor doesn't see the default
+      // "arrived" state and complete on its first tick. The combat pass refines the goal
+      // (chase / resume) from here.
+      if (mode === 'attackmove' && dest) this._movement.setGoal(unit, dest.x, dest.y);
+    }
+  }
+
+  // ── production (docs/adr/0013) ───────────────────────────────────────────────
+
+  // Train executor backend: block (return false) until the Stockpile affords the unit type's
+  // cost, then deduct it, wait the build time, spawn beside the Building, and assign the Flow to
+  // the new Unit. Returns true once the Unit is produced. `state` is the per-node Run scratch.
+  _train(building, params, state, dt) {
+    const def = getUnitType(params.unitType);
+    if (!def) return true; // nothing selected — advance
+    if (!state.started) {
+      if (!this._canAfford(def.cost)) return false; // block until affordable
+      this._spend(def.cost);
+      state.started = true;
+      state.elapsed = 0;
+    }
+    state.elapsed += dt;
+    if (state.elapsed < def.buildTime * 1000) return false; // building…
+    this._spawnTrainedUnit(building, def, params.assignFlow || null);
+    return true;
+  }
+
+  _canAfford(cost) {
+    for (const [res, amt] of Object.entries(cost || {}))
+      if ((this._stockpile[res] || 0) < amt) return false;
+    return true;
+  }
+
+  _spend(cost) {
+    for (const [res, amt] of Object.entries(cost || {}))
+      this._stockpile[res] = (this._stockpile[res] || 0) - amt;
+    this._updateMaterialsPanel();
+  }
+
+  _spawnTrainedUnit(building, def, flowId) {
+    const spot = this._freeTileNear(building);
+    if (!spot) return; // surrounded — drop this product (best-effort, docs/adr/0009)
+    const unit = this._createUnit(def.id, spot.x, spot.y, building.faction);
+    if (!unit) return;
+    if (building.faction === FACTION.PLAYER) {
+      unit.assignedFlowId = flowId && flowLibrary.get(flowId) ? flowId : null;
+      this._startRun(unit); // born running its assigned Flow (docs/adr/0013)
+    }
+    this._refreshUnitLabel(unit);
+  }
+
+  // First free walkable Tile on rings expanding out from just below a Building's Footprint.
+  _freeTileNear(b) {
+    const cx = b.tx + (b.tileW >> 1);
+    const cy = b.ty + b.tileH;
+    for (let r = 1; r <= 14; r++)
+      for (let dy = -r; dy <= r; dy++)
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          const tx = cx + dx, ty = cy + dy;
+          if (this.walkable(tx, ty) && !this._isHill(tx, ty - 1)) return { x: tx, y: ty };
+        }
+    return null;
+  }
+
+  // Create a Unit of a type at a Tile, wire its label/selectability, and register it. Does not
+  // start a Run — the caller assigns a Flow (player) or a data-authored model (Enemy) first.
+  _createUnit(typeId, tx, ty, faction) {
+    const Cls = UNIT_CLASS[typeId];
+    if (!Cls) return null;
+    const unit = new Cls(this, tx * TILE + TILE * 0.5, ty * TILE + TILE, faction);
+    unit.label = getUnitType(typeId)?.label || typeId;
+    unit.sprite.setInteractive({ useHandCursor: true });
+    unit.sprite.setData('unit', unit);
+    unit.labelText = this.add.text(unit.x, unit.y - TILE - 6, '', LABEL_STYLE)
+      .setOrigin(0.5, 1).setDepth(1e6);
+    this.units.push(unit);
+    return unit;
+  }
+
+  // ── scenario: waves & objective (docs/adr/0014) ──────────────────────────────
+
+  // Advance the wave clock and release any Wave whose scheduled time has arrived.
+  _updateScenario(delta) {
+    const st = this._scenarioState;
+    st.time += delta / 1000;
+    while (st.next < SCENARIO.waves.length && st.time >= SCENARIO.waves[st.next].at) {
+      this._spawnWave(SCENARIO.waves[st.next]);
+      st.next++;
+    }
+  }
+
+  _spawnWave(wave) {
+    const origin = this._spawnPoint(wave.spawn);
+    const target = this._enemyTargetTile();
+    for (let i = 0; i < wave.count; i++) {
+      // Fan the group out around the spawn origin so they don't all stack on one Tile.
+      const spot = this._freeWalkableNear(origin.x + ((i % 3) - 1) * 2, origin.y + (((i / 3) | 0) - 1) * 2);
+      if (spot) this._spawnEnemy(wave.unitType, spot, target);
+    }
+  }
+
+  // Spawn one Enemy Unit running a data-authored rush Flow (kept out of the Library, ADR-0011).
+  _spawnEnemy(typeId, spot, target) {
+    const unit = this._createUnit(typeId, spot.x, spot.y, FACTION.ENEMY);
+    if (!unit) return;
+    const id = `enemy_${++this._enemySeq}`;
+    const model = enemyFlowModel(target);
+    this._enemyFlows.set(id, model);
+    unit.assignedFlowId = id;
+    unit.run = startRun(id, model);
+    unit.labelText.setColor?.('#ff6b6b');
+    this._refreshUnitLabel(unit);
+  }
+
+  // Map a named spawn point to an edge Tile, snapped to the nearest walkable Tile.
+  _spawnPoint(name) {
+    const mx = MAP_W >> 1, my = MAP_H >> 1;
+    const raw = name === 'right'  ? { x: MAP_W - 3, y: my }
+              : name === 'top'    ? { x: mx, y: 3 }
+              : name === 'bottom' ? { x: mx, y: MAP_H - 3 }
+              : /* left */          { x: 3, y: my };
+    return this._freeWalkableNear(raw.x, raw.y) || raw;
+  }
+
+  // The Tile Enemies Attack-Move toward: just below the Command Center, snapped to walkable.
+  _enemyTargetTile() {
+    const cc = this._commandCenter;
+    if (!cc) return { x: MAP_W >> 1, y: MAP_H >> 1 };
+    return this._freeWalkableNear(cc.tx + (cc.tileW >> 1), cc.ty + cc.tileH + 1)
+      || { x: cc.tx, y: cc.ty + cc.tileH };
+  }
+
+  // Nearest walkable, non-blocked Tile spiralling out from (tx,ty).
+  _freeWalkableNear(tx, ty) {
+    for (let r = 0; r <= 20; r++)
+      for (let dy = -r; dy <= r; dy++)
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          const x = tx + dx, y = ty + dy;
+          if (this.walkable(x, y) && !this._isHill(x, y - 1)) return { x, y };
+        }
+    return null;
+  }
+
+  // Objective check each frame (docs/adr/0014): victory once every Wave has spawned and no
+  // Enemy remains alive. Defeat (Command Center lost) is triggered from _destroyRunner.
+  _checkObjective() {
+    if (this._over) return;
+    const allWavesOut = this._scenarioState.next >= SCENARIO.waves.length;
+    const enemiesLeft = this.units.some((u) => u.faction === FACTION.ENEMY && u.health > 0);
+    if (allWavesOut && !enemiesLeft) this._endLevel(true);
+  }
+
+  _endLevel(won) {
+    if (this._over) return;
+    this._over = true;
+    this._running = false;
+    this._updateStartBtn();
+    this._showBanner(won ? 'VICTORY — base survived' : 'DEFEAT — Command Center lost', won);
   }
 
   // A Tile is Walkable if it is lowland ground or a ramp (hill tops are not) AND not held by a
@@ -812,8 +1091,19 @@ void main(void){
       case 'deposit_adjacent':  return this._hasAdjacentDeposit(unit);
       case 'at_command_center': return this._adjacentToCommandCenter(unit);
       case 'stockpile_gte':     return (this._stockpile.crystals || 0) >= (params.amount || 0);
+      case 'enemy_in_range':    return this._enemyWithin(unit, getUnitType(unit.type)?.range || 0);
+      case 'enemy_nearby':      return this._enemyWithin(unit, params.amount || params.radius || 0);
       default:                  return false;
     }
+  }
+
+  // True if any opposing-Faction Runner is within `tiles` Tiles of the Unit (edge distance,
+  // accounting for the target's footprint radius) — backs the combat Conditions (docs/adr/0012).
+  _enemyWithin(unit, tiles) {
+    const reach = tiles * TILE;
+    for (const t of this._targetsFor(unit))
+      if (Math.hypot(unit.x - t.x, unit.y - t.y) - t.radius <= reach) return true;
+    return false;
   }
 
   // ── buildings ─────────────────────────────────────────────────────────────
@@ -822,29 +1112,49 @@ void main(void){
     const cx = (MAP_W / 2) | 0;
     const cy = (MAP_H / 2) | 0;
 
-    const place = (BuildingClass, tx, ty, w, h) => {
+    const place = (BuildingClass, tx, ty, w, h, label) => {
       const b = new BuildingClass(this, tx, ty);
       this._reserveClearance(tx, ty, w, h, START_CLEARANCE);
       this._occupy(tx, ty, w, h, 'building', true);
+      this._registerBuilding(b, label);
       return b;
     };
 
     // command center at map center
     const tx = cx - 3, ty = cy - 3;
-    this._commandCenter = place(CommandCenter, tx, ty, 6, 6);
+    this._commandCenter = place(CommandCenter, tx, ty, 6, 6, 'Command Center');
 
     // barracks 2 tiles to the right of command center
-    this._barracks = place(Barracks, tx + 8, ty, 6, 6);
+    this._barracks = place(Barracks, tx + 8, ty, 6, 6, 'Barracks');
 
     // factory 2 tiles to the left of command center
-    this._factory = place(Factory, tx - 8, ty, 6, 6);
+    this._factory = place(Factory, tx - 8, ty, 6, 6, 'Factory');
+  }
+
+  // Make a Building a Runner (CONTEXT.md): selectable, with a restored Assignment and a Run, plus
+  // a label above it showing its assigned Flow. Buildings are ticked alongside Units.
+  _registerBuilding(b, label) {
+    b.label = label;
+    const savedId = this._assignments[label];
+    b.assignedFlowId = savedId && flowLibrary.get(savedId) ? savedId : null;
+    b.sprite.setInteractive({ useHandCursor: true });
+    b.sprite.setData('building', b);
+    b.labelText = this.add.text(b._cx, b._top - 22, '', LABEL_STYLE)
+      .setOrigin(0.5, 1).setDepth(1e6);
+    this.buildings.push(b);
+    this._refreshBuildingLabel(b);
+    this._startRun(b);
+  }
+
+  _refreshBuildingLabel(b) {
+    const entry = b.assignedFlowId ? flowLibrary.get(b.assignedFlowId) : null;
+    b.labelText.setText(entry ? `${b.label} · ${entry.name}` : b.label);
   }
 
   // ── units ─────────────────────────────────────────────────────────────────
 
   _spawnUnits() {
     this.units = [];
-    this._assignments = this._loadAssignments(); // { [unit.label]: flowId }
     const cc  = this._commandCenter;
     const bar = this._barracks;
     const fac = this._factory;
@@ -891,23 +1201,18 @@ void main(void){
     }
   }
 
-  // Make a Unit selectable and give it a Flow-name label above its sprite.
+  // Make a Unit selectable and give it a Flow-name label above its sprite. (Carry capacity now
+  // comes from the unit type in the data table, set in the Unit constructor.)
   _registerUnit(unit, label) {
     unit.label = label;
-    unit.carryCapacity = UNIT_CARRY_CAPACITY; // per-Unit Cargo limit (upgradeable later)
     // Restore a persisted assignment, but only if that Flow still exists in the Library.
     const savedId = this._assignments[label];
     unit.assignedFlowId = savedId && flowLibrary.get(savedId) ? savedId : null;
     unit.sprite.setInteractive({ useHandCursor: true });
     unit.sprite.setData('unit', unit);
 
-    unit.labelText = this.add.text(unit.x, unit.y - TILE - 6, '', {
-      fontFamily: 'system-ui, sans-serif',
-      fontSize: '13px',
-      color: '#ffffff',
-      backgroundColor: 'rgba(0,0,0,0.55)',
-      padding: { x: 5, y: 2 },
-    }).setOrigin(0.5, 1).setDepth(1e6);
+    unit.labelText = this.add.text(unit.x, unit.y - TILE - 6, '', LABEL_STYLE)
+      .setOrigin(0.5, 1).setDepth(1e6);
 
     this.units.push(unit);
     this._refreshUnitLabel(unit);
@@ -927,21 +1232,23 @@ void main(void){
     unit.labelText.setText(parts.join('  ·  '));
   }
 
-  // (Re)start a Unit's Run from its assigned Flow's OnStart. Called when a Unit is registered
-  // and when its Assignment changes — a fresh Assignment runs from the top. A Run only exists
-  // while the simulation is running (docs/adr/0005): paused, or with no Flow assigned, idle.
-  _startRun(unit) {
-    const entry = this._running && unit.assignedFlowId ? flowLibrary.get(unit.assignedFlowId) : null;
-    unit.run = entry ? startRun(entry.id, entry.model) : null;
+  // (Re)start a Runner's Run from its assigned Flow's OnStart — Units and Buildings alike. Called
+  // when a Runner is registered and when its Assignment changes; a fresh Assignment runs from the
+  // top. A Run only exists while the simulation is running (docs/adr/0005): paused, or with no
+  // Flow assigned, it is idle.
+  _startRun(runner) {
+    const entry = this._running && runner.assignedFlowId ? flowLibrary.get(runner.assignedFlowId) : null;
+    runner.run = entry ? startRun(entry.id, entry.model) : null;
   }
 
   // START/PAUSE (docs/adr/0005). PAUSE only flips the flag — update() then freezes, so every
-  // Run keeps its cursor and every Unit keeps its position. START resumes those frozen Runs
-  // exactly where they were and starts any assigned Unit that has no Run yet (firing OnStart),
-  // so the very first START launches the Flows and later ones continue rather than restart.
+  // Run keeps its cursor and every Runner keeps its position. START resumes those frozen Runs and
+  // starts any assigned Runner that has no Run yet (firing OnStart), so the very first START
+  // launches the Flows and later ones continue rather than restart.
   _setRunning(running) {
+    if (this._over) return; // level decided — START/PAUSE is inert
     this._running = running;
-    if (running) for (const unit of this.units) if (!unit.run) this._startRun(unit);
+    if (running) for (const r of this._runners()) if (!r.run) this._startRun(r);
     this._updateStartBtn();
   }
 
@@ -976,6 +1283,22 @@ void main(void){
       .join('     ');
   }
 
+  // Centre banner for the Objective outcome (docs/adr/0014) — hidden until win/lose.
+  _buildBanner() {
+    const b = document.createElement('div');
+    b.className = 'level-banner hidden';
+    document.body.appendChild(b);
+    this._banner = b;
+  }
+
+  _showBanner(text, won) {
+    if (!this._banner) return;
+    this._banner.textContent = text;
+    this._banner.classList.toggle('win', won);
+    this._banner.classList.toggle('lose', !won);
+    this._banner.classList.remove('hidden');
+  }
+
   // Sync a Unit's sprite + label to its logical {x,y} (feet position), keeping depth = y so
   // it sorts correctly against trees/crystals/other Units.
   _placeUnit(unit) {
@@ -983,6 +1306,7 @@ void main(void){
     unit.sprite.setPosition(unit.x, unit.y);
     unit.sprite.setDepth(unit.y);
     unit.labelText.setPosition(unit.x, unit.y - TILE - 6);
+    unit.syncHealthBar();
   }
 
   // ── assignment persistence ─────────────────────────────────────────────────
@@ -994,7 +1318,8 @@ void main(void){
 
   _saveAssignments() {
     const map = {};
-    for (const u of this.units) if (u.assignedFlowId) map[u.label] = u.assignedFlowId;
+    for (const r of this._runners())
+      if (r.assignedFlowId && r.faction === FACTION.PLAYER) map[r.label] = r.assignedFlowId;
     try { localStorage.setItem(ASSIGN_KEY, JSON.stringify(map)); } catch { /* quota/full */ }
   }
 
@@ -1044,15 +1369,28 @@ void main(void){
     this.input.on('pointerup', endDrag);
     this.input.on('pointerupoutside', endDrag);
 
-    // Click a Unit → open the assign-flow overlay (ignore while picking or after a drag).
+    // Click a Runner → open the assign-flow overlay, filtered to that Runner's kind (docs/adr/
+    // 0015). Ignore while picking or after a drag. A Unit picks Unit-Flows; a Building, Building-
+    // Flows. Enemy Units are not the player's to command.
     this.input.on('gameobjectup', (_p, obj) => {
       if (this._pick || this._dragMoved) return;
       const unit = obj.getData && obj.getData('unit');
-      if (unit) openAssignOverlay(unit, flowLibrary, (u) => {
-        this._refreshUnitLabel(u);
-        this._saveAssignments();
-        this._startRun(u); // always-live: new Assignment runs at once; re-assign restarts
-      });
+      if (unit && unit.faction === FACTION.PLAYER) {
+        openAssignOverlay(unit, flowLibrary, 'unit', (u) => {
+          this._refreshUnitLabel(u);
+          this._saveAssignments();
+          this._startRun(u); // always-live: new Assignment runs at once; re-assign restarts
+        });
+        return;
+      }
+      const building = obj.getData && obj.getData('building');
+      if (building && building.faction === FACTION.PLAYER) {
+        openAssignOverlay(building, flowLibrary, 'building', (b) => {
+          this._refreshBuildingLabel(b);
+          this._saveAssignments();
+          this._startRun(b);
+        });
+      }
     });
 
     this.input.on('wheel', (_p, _objs, _dx, deltaY) => {
