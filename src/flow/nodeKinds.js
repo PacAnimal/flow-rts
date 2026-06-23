@@ -74,6 +74,24 @@ export const NODE_KINDS = {
       { id: 'duration', type: 'number', label: 'Seconds', min: 0, step: 0.5 },
     ],
   },
+
+  Branch: {
+    kind: 'Branch',
+    category: 'control',
+    title: 'Branch',
+    // Routes to one of two Exec outputs by evaluating a Condition (docs/adr/0010). Evaluates
+    // instantly when reached; an unset Condition is false (No). Yes/No outputs render top-down.
+    ports: [
+      { id: 'in', dir: 'in', type: 'exec', label: '' },
+      { id: 'yes', dir: 'out', type: 'exec', label: 'Yes' },
+      { id: 'no', dir: 'out', type: 'exec', label: 'No' },
+    ],
+    // The Condition (+ any of its args) is stored as a Parameter. The 'condition' param type
+    // renders a dropdown from the Condition catalog plus the chosen Condition's arg rows.
+    params: [
+      { id: 'condition', type: 'condition', label: 'Condition' },
+    ],
+  },
 };
 
 export function getNodeKind(kind) {

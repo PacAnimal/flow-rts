@@ -6,6 +6,7 @@
 
 import './editor.css';
 import { NODE_KINDS, getNodeKind, getParams } from './nodeKinds.js';
+import { CONDITIONS, getCondition } from '../conditions.js';
 import { pickPosition } from './positionPicker.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -230,12 +231,58 @@ export class FlowEditor {
   // A Parameter row: a label plus an editor chosen by the param's type (ADR-0004). A 'tile'
   // opens the in-world picker; a 'number' is edited inline. Either may be unset.
   _buildParamRow(node, param) {
+    if (param.type === 'condition') return this._conditionParam(node, param);
     const row = el('div', 'param-row');
     row.appendChild(el('span', 'param-label', param.label));
     row.appendChild(
       param.type === 'number' ? this._numberInput(node, param) : this._tileButton(node, param),
     );
     return row;
+  }
+
+  // A 'condition' Parameter (docs/adr/0010): a dropdown of Conditions plus the chosen Condition's
+  // argument rows, re-rendered when the Condition changes. Args are stored flat in node.params.
+  _conditionParam(node, param) {
+    const wrap = el('div', 'param-condition');
+
+    const row = el('div', 'param-row');
+    row.appendChild(el('span', 'param-label', param.label));
+    const select = el('select', 'param-select');
+    select.appendChild(el('option', null, '—')).value = '';
+    for (const cond of Object.values(CONDITIONS)) {
+      select.appendChild(el('option', null, cond.label)).value = cond.id;
+    }
+    select.value = (node.params && node.params.condition) || '';
+    select.addEventListener('pointerdown', (e) => e.stopPropagation());
+
+    const argsBox = el('div', 'param-args');
+    const renderArgs = () => {
+      argsBox.replaceChildren();
+      const cond = getCondition((node.params && node.params.condition) || '');
+      if (cond) for (const arg of cond.args) argsBox.appendChild(this._buildParamRow(node, arg));
+    };
+
+    select.addEventListener('change', () => {
+      this._setCondition(node, select.value || null);
+      this.library.save();
+      renderArgs();
+    });
+
+    row.appendChild(select);
+    wrap.appendChild(row);
+    wrap.appendChild(argsBox);
+    renderArgs();
+    return wrap;
+  }
+
+  // Set a Branch's Condition, dropping any argument Parameters that don't belong to the new one
+  // so node.params stays clean across Condition switches.
+  _setCondition(node, id) {
+    const keep = id && getCondition(id) ? getCondition(id).args.map((a) => a.id) : [];
+    for (const cond of Object.values(CONDITIONS))
+      for (const arg of cond.args)
+        if (!keep.includes(arg.id)) this.model.setParam(node.id, arg.id, null);
+    this.model.setParam(node.id, 'condition', id);
   }
 
   // A 'tile' Parameter: a button showing the current value that opens the position picker.

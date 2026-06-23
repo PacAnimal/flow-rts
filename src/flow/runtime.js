@@ -57,6 +57,10 @@ const EXECUTORS = {
     state.elapsed = (state.elapsed || 0) + dt;
     return state.elapsed >= seconds * 1000 ? done() : RUNNING;
   },
+
+  // Evaluate the node's Condition and route to the 'yes' or 'no' Exec output (docs/adr/0010).
+  // Instant; the world owns evaluation. An unset/false Condition routes 'no'.
+  Branch: (node, runner, world) => done(world.test(runner, node.params || {}) ? 'yes' : 'no'),
 };
 
 // Begin a Run at the Flow's OnStart Event. With a single cursor we take the first OnStart;
