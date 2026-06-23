@@ -5,6 +5,8 @@ import { Mech } from '../entities/Mech.js';
 import { Zapper } from '../entities/Zapper.js';
 import { Tank } from '../entities/Tank.js';
 import { Reaper } from '../entities/Reaper.js';
+import { Biter } from '../entities/Biter.js';
+import { HeavyChojin } from '../entities/HeavyChojin.js';
 import { CommandCenter } from '../entities/CommandCenter.js';
 import { Barracks } from '../entities/Barracks.js';
 import { Factory } from '../entities/Factory.js';
@@ -58,7 +60,7 @@ export class MapScene extends Phaser.Scene {
     this.load.image('command_center', '/sprites/command_center.png');
     this.load.image('barracks', '/sprites/barracks.png');
     this.load.image('factory', '/sprites/factory.png');
-    const UNIT_TYPES = ['worker', 'marine', 'mech', 'zapper', 'tank', 'reaper'];
+    const UNIT_TYPES = ['worker', 'marine', 'mech', 'zapper', 'tank', 'reaper', 'biter', 'heavy-chojin'];
     const UNIT_DIRS  = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'dead'];
     for (const type of UNIT_TYPES)
       for (const d of UNIT_DIRS) this.load.image(`${type}_${d}`, `/sprites/${type}_${d}.png`);
@@ -860,6 +862,8 @@ void main(void){
       { tx: bar.tx - 3,                   ty: bar.ty + bar.tileH,            label: 'Zapper 2', Cls: Zapper, dir: 'SE' },
       { tx: bar.tx + bar.tileW + 2,       ty: bar.ty - 3,                    label: 'Reaper 1', Cls: Reaper, dir: 'S'  },
       { tx: bar.tx + bar.tileW + 4,       ty: bar.ty - 3,                    label: 'Reaper 2', Cls: Reaper, dir: 'SW' },
+      { tx: cc.tx + 15,                   ty: cc.ty + 15,                    label: 'Biter 1',  Cls: Biter,  dir: 'S'  },
+      { tx: cc.tx + 17,                   ty: cc.ty + 15,                    label: 'Biter 2',  Cls: Biter,  dir: 'SW' },
     ];
     for (const { tx: targetX, ty: targetY, label, Cls, dir } of unitSpawns) {
       for (let r = 0; r <= 10; r++) {
