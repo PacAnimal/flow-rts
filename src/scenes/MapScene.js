@@ -1333,6 +1333,11 @@ void main(void){
       (MAP_H * TILE - cam.height) * 0.5
     );
 
+    // The Flow editor is a DOM overlay (docs/adr/0001). While it's open, disable all map pointer
+    // input — Phaser's window-level listeners would otherwise let clicks fall through the overlay
+    // onto Units/Buildings behind it. The editor emits this event from _applyVisibility.
+    window.addEventListener('flow-editor-visibility', (e) => { this.input.enabled = !e.detail.open; });
+
     let drag = null;
     // Tracked separately from `drag` so it survives pointerup (which clears `drag`) and is
     // still readable when gameobjectup fires — order between the two isn't guaranteed.

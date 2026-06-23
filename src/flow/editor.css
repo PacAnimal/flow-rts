@@ -5,7 +5,7 @@
   position: fixed;
   top: 12px;
   right: 12px;
-  z-index: 1100;
+  z-index: 1200; /* above .flow-editor so it stays clickable to close the overlay */
   padding: 8px 16px;
   font: 600 13px/1 system-ui, sans-serif;
   letter-spacing: 0.04em;
@@ -87,7 +87,7 @@
 .flow-editor {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: 1150; /* above the HUD panels (materials/sim-toggle at 1100) so it fully covers them */
   display: flex;
   font: 13px/1.4 system-ui, sans-serif;
   color: #e8eef2;

@@ -53,6 +53,10 @@ export class FlowEditor {
   _applyVisibility() {
     this.root.classList.toggle('hidden', !this.visible);
     this.toggleBtn.classList.toggle('active', this.visible);
+    // Suppress map input while the overlay is open. Covering the canvas isn't enough on its own:
+    // Phaser also listens on `window` (input.windowEvents), so clicks on the overlay still bubble
+    // up and hit-test Units/Buildings behind it. The scene flips this.input.enabled on this event.
+    window.dispatchEvent(new CustomEvent('flow-editor-visibility', { detail: { open: this.visible } }));
   }
 
   // ── DOM scaffolding ────────────────────────────────────────────────────────
