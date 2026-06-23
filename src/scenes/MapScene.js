@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { Worker } from '../entities/Worker.js';
 import { Marine } from '../entities/Marine.js';
+import { Mech } from '../entities/Mech.js';
 import { CommandCenter } from '../entities/CommandCenter.js';
 import { Barracks } from '../entities/Barracks.js';
 import { Factory } from '../entities/Factory.js';
@@ -54,7 +55,7 @@ export class MapScene extends Phaser.Scene {
     this.load.image('command_center', '/sprites/command_center.png');
     this.load.image('barracks', '/sprites/barracks.png');
     this.load.image('factory', '/sprites/factory.png');
-    const UNIT_TYPES = ['worker', 'marine'];
+    const UNIT_TYPES = ['worker', 'marine', 'mech'];
     const UNIT_DIRS  = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'dead'];
     for (const type of UNIT_TYPES)
       for (const d of UNIT_DIRS) this.load.image(`${type}_${d}`, `/sprites/${type}_${d}.png`);
@@ -816,14 +817,17 @@ void main(void){
     this._assignments = this._loadAssignments(); // { [unit.label]: flowId }
     const cc  = this._commandCenter;
     const bar = this._barracks;
-    // workers below the command center facing it; marines to the right of the barracks facing it
+    const fac = this._factory;
+    // workers below CC; marines right of barracks; mechs left of factory
     const unitSpawns = [
-      { tx: cc.tx - 1,                    ty: cc.ty + cc.tileH + 3,   label: 'Worker 1', Cls: Worker, dir: 'S'  },
-      { tx: cc.tx + (cc.tileW / 2 | 0),   ty: cc.ty + cc.tileH + 3,   label: 'Worker 2', Cls: Worker, dir: 'SE' },
-      { tx: cc.tx + cc.tileW + 1,         ty: cc.ty + cc.tileH + 3,   label: 'Worker 3', Cls: Worker, dir: 'NW' },
-      { tx: bar.tx + bar.tileW + 2,       ty: bar.ty,                  label: 'Marine 1', Cls: Marine, dir: 'W'  },
+      { tx: cc.tx - 1,                    ty: cc.ty + cc.tileH + 3,        label: 'Worker 1', Cls: Worker, dir: 'S'  },
+      { tx: cc.tx + (cc.tileW / 2 | 0),   ty: cc.ty + cc.tileH + 3,        label: 'Worker 2', Cls: Worker, dir: 'SE' },
+      { tx: cc.tx + cc.tileW + 1,         ty: cc.ty + cc.tileH + 3,        label: 'Worker 3', Cls: Worker, dir: 'NW' },
+      { tx: bar.tx + bar.tileW + 2,       ty: bar.ty,                       label: 'Marine 1', Cls: Marine, dir: 'W'  },
       { tx: bar.tx + bar.tileW + 2,       ty: bar.ty + (bar.tileH / 2 | 0), label: 'Marine 2', Cls: Marine, dir: 'SW' },
-      { tx: bar.tx + bar.tileW + 2,       ty: bar.ty + bar.tileH,      label: 'Marine 3', Cls: Marine, dir: 'NW' },
+      { tx: bar.tx + bar.tileW + 2,       ty: bar.ty + bar.tileH,           label: 'Marine 3', Cls: Marine, dir: 'NW' },
+      { tx: fac.tx,                        ty: fac.ty + fac.tileH + 2,       label: 'Mech 1',   Cls: Mech,   dir: 'N'  },
+      { tx: fac.tx + fac.tileW,           ty: fac.ty + fac.tileH + 2,       label: 'Mech 2',   Cls: Mech,   dir: 'NE' },
     ];
     for (const { tx: targetX, ty: targetY, label, Cls, dir } of unitSpawns) {
       for (let r = 0; r <= 10; r++) {
