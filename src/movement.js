@@ -74,7 +74,7 @@ export class MovementSystem {
       if (mv && mv.path && !mv.arrived) {
         const goal = mv.path[mv.path.length - 1];
         if (dist(unit.x, unit.y, goal.x, goal.y) <= ARRIVE) mv.arrived = true;
-        else if (moved < STUCK_SPEED * s) { if ((mv.stuck += dt) > STUCK_MS) mv.arrived = true; }
+        else if (moved < (unit.speed ?? SPEED) * 0.12 * s) { if ((mv.stuck += dt) > STUCK_MS) mv.arrived = true; }
         else mv.stuck = 0;
       }
     }
@@ -85,6 +85,7 @@ export class MovementSystem {
 
   // Desired velocity = arrive-along-Path (only while travelling) + separation (always).
   _steer(unit, units) {
+    const topSpeed = unit.speed ?? SPEED;
     let vx = 0, vy = 0;
     const mv = unit.mv;
 
@@ -96,7 +97,7 @@ export class MovementSystem {
         // ease down near the final destination so Units settle instead of orbiting
         const goal = mv.path[mv.path.length - 1];
         const dGoal = dist(unit.x, unit.y, goal.x, goal.y);
-        const speed = dGoal < SLOW_RADIUS ? SPEED * Math.max(0.15, dGoal / SLOW_RADIUS) : SPEED;
+        const speed = dGoal < SLOW_RADIUS ? topSpeed * Math.max(0.15, dGoal / SLOW_RADIUS) : topSpeed;
         vx += (tgt.x - unit.x) / d * speed;
         vy += (tgt.y - unit.y) / d * speed;
       }
@@ -107,7 +108,7 @@ export class MovementSystem {
       const dx = unit.x - other.x, dy = unit.y - other.y;
       const d = Math.hypot(dx, dy);
       if (d > 0 && d < SEP_RANGE) {
-        const push = (1 - d / SEP_RANGE) * SPEED;
+        const push = (1 - d / SEP_RANGE) * topSpeed;
         vx += dx / d * push;
         vy += dy / d * push;
       }
@@ -115,7 +116,7 @@ export class MovementSystem {
 
     // clamp to top speed (separation can fully override seek in a crowd ⇒ Units yield)
     const sp = Math.hypot(vx, vy);
-    if (sp > SPEED) { vx = vx / sp * SPEED; vy = vy / sp * SPEED; }
+    if (sp > topSpeed) { vx = vx / sp * topSpeed; vy = vy / sp * topSpeed; }
     return { x: vx, y: vy };
   }
 

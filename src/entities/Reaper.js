@@ -1,8 +1,8 @@
 import { Unit } from './Unit.js';
 import { TILE } from '../constants.js';
 
-export class Mech extends Unit {
+export class Reaper extends Unit {
   constructor(scene, x, y) {
-    super(scene, x, y, 'mech', TILE * 1.5, 3.6);
+    super(scene, x, y, 'reaper', TILE * 1.1, 6);
   }
 }

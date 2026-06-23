@@ -1,13 +1,16 @@
+import { TILE, UNIT_SPEED } from '../constants.js';
+
 // directions in clockwise order, matching angle buckets
 const DIRS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
 export class Unit {
-  constructor(scene, x, y, texturePrefix, displaySize) {
+  constructor(scene, x, y, texturePrefix, displaySize, speedTilesPerSec = UNIT_SPEED) {
     this.scene = scene;
     this.x = x;
     this.y = y;
     this._texturePrefix = texturePrefix;
     this._displaySize = displaySize;
+    this.speed = speedTilesPerSec * TILE;
     this._dir = 'S';
 
     this.sprite = scene.add.image(x, y, `${texturePrefix}_S`);

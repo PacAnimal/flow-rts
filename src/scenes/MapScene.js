@@ -2,6 +2,9 @@ import Phaser from 'phaser';
 import { Worker } from '../entities/Worker.js';
 import { Marine } from '../entities/Marine.js';
 import { Mech } from '../entities/Mech.js';
+import { Zapper } from '../entities/Zapper.js';
+import { Tank } from '../entities/Tank.js';
+import { Reaper } from '../entities/Reaper.js';
 import { CommandCenter } from '../entities/CommandCenter.js';
 import { Barracks } from '../entities/Barracks.js';
 import { Factory } from '../entities/Factory.js';
@@ -55,7 +58,7 @@ export class MapScene extends Phaser.Scene {
     this.load.image('command_center', '/sprites/command_center.png');
     this.load.image('barracks', '/sprites/barracks.png');
     this.load.image('factory', '/sprites/factory.png');
-    const UNIT_TYPES = ['worker', 'marine', 'mech'];
+    const UNIT_TYPES = ['worker', 'marine', 'mech', 'zapper', 'tank', 'reaper'];
     const UNIT_DIRS  = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'dead'];
     for (const type of UNIT_TYPES)
       for (const d of UNIT_DIRS) this.load.image(`${type}_${d}`, `/sprites/${type}_${d}.png`);
@@ -852,6 +855,11 @@ void main(void){
       { tx: bar.tx + bar.tileW + 2,       ty: bar.ty + bar.tileH,           label: 'Marine 3', Cls: Marine, dir: 'NW' },
       { tx: fac.tx,                        ty: fac.ty + fac.tileH + 2,       label: 'Mech 1',   Cls: Mech,   dir: 'N'  },
       { tx: fac.tx + fac.tileW,           ty: fac.ty + fac.tileH + 2,       label: 'Mech 2',   Cls: Mech,   dir: 'NE' },
+      { tx: fac.tx + (fac.tileW / 2 | 0), ty: fac.ty + fac.tileH + 4,       label: 'Tank 1',   Cls: Tank,   dir: 'N'  },
+      { tx: bar.tx - 3,                   ty: bar.ty,                        label: 'Zapper 1', Cls: Zapper, dir: 'E'  },
+      { tx: bar.tx - 3,                   ty: bar.ty + bar.tileH,            label: 'Zapper 2', Cls: Zapper, dir: 'SE' },
+      { tx: bar.tx + bar.tileW + 2,       ty: bar.ty - 3,                    label: 'Reaper 1', Cls: Reaper, dir: 'S'  },
+      { tx: bar.tx + bar.tileW + 4,       ty: bar.ty - 3,                    label: 'Reaper 2', Cls: Reaper, dir: 'SW' },
     ];
     for (const { tx: targetX, ty: targetY, label, Cls, dir } of unitSpawns) {
       for (let r = 0; r <= 10; r++) {

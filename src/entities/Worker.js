@@ -3,6 +3,6 @@ import { TILE } from '../constants.js';
 
 export class Worker extends Unit {
   constructor(scene, x, y) {
-    super(scene, x, y, 'worker', TILE);
+    super(scene, x, y, 'worker', TILE * 1.5, 1.5);
   }
 }
