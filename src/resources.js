@@ -11,6 +11,7 @@ export const RESOURCES = {
     gatherTime: 3,        // seconds a Worker stands to gather one yield
     yield: 10,            // amount taken into Cargo per gather
     depositAmount: 100,   // a Deposit of this Resource starts with this much (≈10 gathers)
+    sprites: Array.from({ length: 18 }, (_, i) => `crystals${i + 1}`),
   },
 };
 

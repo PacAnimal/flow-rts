@@ -54,26 +54,8 @@ export class MapScene extends Phaser.Scene {
     this.load.image('barracks', '/sprites/barracks.png');
     this.load.image('factory', '/sprites/factory.png');
     this.load.image('worker', '/sprites/worker.png');
-    this.load.image('tree1', '/sprites/tree1.png');
-    this.load.image('tree2', '/sprites/tree2.png');
-    this.load.image('crystals1', '/sprites/crystals1.png');
-    this.load.image('crystals2', '/sprites/crystals2.png');
-    for (let i = 1; i <= 13; i++) {
-      const n = String(i).padStart(2, '0');
-      this.load.image(`obstacle_${n}`, `/sprites/obstacles/obstacles_${n}.png`);
-    }
-    for (let i = 1; i <= 9; i++) {
-      const n = String(i).padStart(2, '0');
-      this.load.image(`base_mark_${n}`, `/sprites/decor/base_marks_${n}.png`);
-    }
-    for (let i = 1; i <= 8; i++) {
-      const n = String(i).padStart(2, '0');
-      this.load.image(`dirt1_${n}`, `/sprites/decor/dirt1_${n}.png`);
-    }
-    for (let i = 1; i <= 9; i++) {
-      const n = String(i).padStart(2, '0');
-      this.load.image(`dirt2_${n}`, `/sprites/decor/dirt2_${n}.png`);
-    }
+    for (const key of DECORATIONS.tree.sprites) this.load.image(key, `/sprites/${key}.png`);
+    for (const key of RESOURCES.crystals.sprites) this.load.image(key, `/sprites/${key}.png`);
   }
 
   create() {
@@ -104,7 +86,7 @@ export class MapScene extends Phaser.Scene {
     if (!groundOnly) this._buildTilemap(tiles);
     if (!groundOnly) this._spawnBuildings();   // reserve command-center footprint + start clearance first
     if (!groundOnly) this._placeCrystals();    // clustered crystal Deposits (docs/adr/0009)
-    if (!groundOnly) this._placeDecorations(); // trees, holes — scattered, no overlap (docs/adr/0009)
+    if (!groundOnly) this._placeDecorations(); // trees — scattered, no overlap (docs/adr/0009)
     if (!groundOnly) this._spawnUnits();
     this._setupCamera();
     this.input.mouse?.disableContextMenu(); // allow right-click as a cancel gesture
@@ -648,9 +630,9 @@ void main(void){
     const placed = [];
     const place = (tx, ty) => {
       const img = this.add.image(tx * TILE + TILE * 0.5, ty * TILE + TILE * 0.5,
-        r() < 0.5 ? 'crystals1' : 'crystals2');
+        RESOURCES.crystals.sprites[(r() * RESOURCES.crystals.sprites.length) | 0]);
       img.setOrigin(0.5, 0.5);
-      img.setScale(TILE * (0.8 + r() * 0.5) / 1024);
+      img.setScale(TILE * (1.5 + r() * 1.0) / Math.max(img.width, img.height));
       img.setDepth(ty * TILE + TILE); // sort as if grounded at the Tile's bottom edge
       this._addDeposit('crystals', tx, ty, img); // registers Deposit + occupancy
       placed.push({ x: tx, y: ty });
@@ -811,14 +793,14 @@ void main(void){
     };
 
     // command center at map center
-    const tx = cx - 1, ty = cy - 1;
-    this._commandCenter = place(CommandCenter, tx, ty, 3, 3);
+    const tx = cx - 3, ty = cy - 3;
+    this._commandCenter = place(CommandCenter, tx, ty, 6, 6);
 
-    // barracks 6 tiles to the right
-    this._barracks = place(Barracks, tx + 6, ty, 3, 3);
+    // barracks 2 tiles to the right of command center
+    this._barracks = place(Barracks, tx + 8, ty, 6, 6);
 
-    // factory 6 tiles to the left
-    this._factory = place(Factory, tx - 6, ty, 3, 3);
+    // factory 2 tiles to the left of command center
+    this._factory = place(Factory, tx - 8, ty, 6, 6);
   }
 
   // ── units ─────────────────────────────────────────────────────────────────
