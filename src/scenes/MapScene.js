@@ -62,6 +62,22 @@ export class MapScene extends Phaser.Scene {
       const n = String(i).padStart(2, '0');
       this.load.image(`obstacle_${n}`, `/sprites/obstacles/obstacles_${n}.png`);
     }
+    for (let i = 1; i <= 9; i++) {
+      const n = String(i).padStart(2, '0');
+      this.load.image(`base_mark_${n}`, `/sprites/decor/base_marks_${n}.png`);
+    }
+    for (let i = 1; i <= 8; i++) {
+      const n = String(i).padStart(2, '0');
+      this.load.image(`dirt1_${n}`, `/sprites/decor/dirt1_${n}.png`);
+    }
+    for (let i = 1; i <= 9; i++) {
+      const n = String(i).padStart(2, '0');
+      this.load.image(`dirt2_${n}`, `/sprites/decor/dirt2_${n}.png`);
+    }
+    this.load.image('gravel',  '/sprites/decor/gravel.png');
+    this.load.image('gravel2', '/sprites/decor/gravel2.png');
+    this.load.image('gravel3', '/sprites/decor/gravel3.png');
+    this.load.image('gravel4', '/sprites/decor/gravel4.png');
   }
 
   create() {
@@ -87,6 +103,12 @@ export class MapScene extends Phaser.Scene {
     const { tiles, isHill, isRamp } = this._generateTerrain();
     this._isHill = isHill;
     this._isRamp = isRamp;
+    this._drawGroundBase();
+    this._drawAlgorithmicNoise();
+    this._drawGravelLayer();
+    this._drawGravel2Layer();
+    this._drawGravel3Layer();
+    this._drawGravel4Layer();
     this._buildTilemap(tiles);
     this._spawnBuildings();   // reserve command-center footprint + start clearance first
     this._placeCrystals();    // clustered crystal Deposits (docs/adr/0009)
@@ -158,8 +180,7 @@ export class MapScene extends Phaser.Scene {
     canvas.height = TILE;
     const ctx = canvas.getContext('2d');
 
-    ctx.fillStyle = '#3a3530';
-    ctx.fillRect(0, 0, TILE * 3, TILE);
+    // grass tiles (0-2) are transparent — base ground color comes from _drawGroundBase()
 
     // pre-generate all 16 hill autotile variants
     for (let mask = 0; mask < 16; mask++) {
@@ -392,7 +413,181 @@ export class MapScene extends Phaser.Scene {
   _buildTilemap(tiles) {
     const map = this.make.tilemap({ data: tiles, tileWidth: TILE, tileHeight: TILE });
     const ts  = map.addTilesetImage('tileset', 'tileset', TILE, TILE, EXTRUDE, 2 * EXTRUDE);
-    map.createLayer(0, ts, 0, 0);
+    map.createLayer(0, ts, 0, 0).setDepth(-50);
+  }
+
+  // ── ground noise system ──────────────────────────────────────────────────────
+
+  // Solid base rectangle — everything sits on top of this.
+  _drawGroundBase() {
+    this.add.graphics()
+      .fillStyle(0x000000)
+      .fillRect(0, 0, MAP_W * TILE, MAP_H * TILE)
+      .setDepth(-300);
+  }
+
+  // Ground noise: 640×640 tiles at 50% overlap with Hann window alpha (sin²×sin²).
+  // ADD blend mode on a black base gives an exact partition of unity — at every world
+  // pixel the 4 overlapping tiles' Hann weights sum to 1, so there are no seams and
+  // no base colour bleed.  4 unique seeded variants break up the periodic repetition.
+  _drawAlgorithmicNoise() {
+    const SIZE   = 640;
+    const STRIDE = SIZE >> 1;  // 320 — 50% overlap gives Hann partition of unity
+
+    const makeGrid = (G, rng) => {
+      const ng = new Float32Array((G + 1) * (G + 1));
+      for (let y = 0; y < G; y++)
+        for (let x = 0; x < G; x++)
+          ng[y * (G + 1) + x] = rng();
+      for (let y = 0; y <= G; y++) ng[y * (G + 1) + G] = ng[(y % G) * (G + 1)];
+      for (let x = 0; x <= G; x++) ng[G * (G + 1) + x] = ng[x % G];
+      return ng;
+    };
+
+    const sample = (ng, G, nx, ny) => {
+      const gx = nx * G, gy = ny * G;
+      const x0 = Math.min(G - 1, gx | 0), y0 = Math.min(G - 1, gy | 0);
+      const x1 = x0 + 1, y1 = y0 + 1;
+      const fx = gx - x0, fy = gy - y0;
+      const s  = t => t * t * (3 - 2 * t);
+      const sfx = s(fx), sfy = s(fy);
+      return ng[y0*(G+1)+x0]*(1-sfx)*(1-sfy)
+           + ng[y0*(G+1)+x1]*sfx*(1-sfy)
+           + ng[y1*(G+1)+x0]*(1-sfx)*sfy
+           + ng[y1*(G+1)+x1]*sfx*sfy;
+    };
+
+    const mkTex = (seed) => {
+      const cvs  = document.createElement('canvas');
+      cvs.width  = cvs.height = SIZE;
+      const ctx  = cvs.getContext('2d', { willReadFrequently: true });
+      const imgd = ctx.getImageData(0, 0, SIZE, SIZE);
+      const d    = imgd.data;
+      const rng  = mkRNG(seed);
+      // 4 octaves: 40px → 20px → 10px → 5px grain — no coarse blobs that look cloudy
+      const octaves = [[16, 0.25], [32, 0.30], [64, 0.30], [128, 0.15]]
+        .map(([G, w]) => ({ G, w, ng: makeGrid(G, rng) }));
+      for (let y = 0; y < SIZE; y++) {
+        // sample at pixel centre (+0.5) for exact discrete partition of unity
+        const ay = Math.sin(Math.PI * (y + 0.5) / SIZE);
+        for (let x = 0; x < SIZE; x++) {
+          let n = 0;
+          for (const { G, w, ng } of octaves) n += sample(ng, G, x / SIZE, y / SIZE) * w;
+          const v  = Math.round((n - 0.5) * 50);
+          const ax = Math.sin(Math.PI * (x + 0.5) / SIZE);
+          const i  = (y * SIZE + x) * 4;
+          d[i]   = Math.max(0, Math.min(255, 56 + v));
+          d[i+1] = Math.max(0, Math.min(255, 36 + Math.round(v * 0.55)));
+          d[i+2] = Math.max(0, Math.min(255, 32 + Math.round(v * 0.65)));
+          d[i+3] = Math.round(ax * ax * ay * ay * 255);
+        }
+      }
+      ctx.putImageData(imgd, 0, 0);
+      return cvs;
+    };
+
+    const keys = [99887, 31415, 27182, 16180].map((seed, i) => {
+      const key = `_gnd_noise_${i}`;
+      this.textures.addCanvas(key, mkTex(seed));
+      return key;
+    });
+
+    // collect placements, sort by texture for max WebGL batching (ADD is commutative so order is irrelevant visually)
+    const rng   = mkRNG(44556);
+    const tiles = [];
+    for (let ty = -1; ty * STRIDE < MAP_H * TILE; ty++)
+      for (let tx = -1; tx * STRIDE < MAP_W * TILE; tx++)
+        tiles.push({ tx, ty, key: keys[(rng() * 4) | 0] });
+    tiles.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+
+    for (const { tx, ty, key } of tiles)
+      this.add.image(tx * STRIDE, ty * STRIDE, key)
+        .setOrigin(0, 0)
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setDepth(-200);
+  }
+
+  // Scatter gravel.png instances across the map: grid + jitter + random rotation.
+  // The texture is already 88% transparent (sparse pebbles); overlapping instances
+  // give natural coverage without any additional alpha mask needed.
+  _drawGravelLayer() {
+    // gravel.png is 1254×1254 — scale down for fine detail, pack tightly for density
+    const SCALE  = 0.28;
+    const STEP   = 150;
+    const JITTER = 45;
+    const rng    = mkRNG(33221);
+    for (let gy = 0; gy < MAP_H * TILE; gy += STEP) {
+      for (let gx = 0; gx < MAP_W * TILE; gx += STEP) {
+        const px = gx + (rng() - 0.5) * 2 * JITTER;
+        const py = gy + (rng() - 0.5) * 2 * JITTER;
+        this.add.image(px, py, 'gravel')
+          .setScale(SCALE)
+          .setRotation(rng() * Math.PI * 2)
+          .setAlpha(0.4)
+          .setBlendMode(Phaser.BlendModes.ADD)
+          .setDepth(-150);
+      }
+    }
+  }
+
+  // gravel2 scattered on top of gravel (-140), different seed/step for visual variety
+  _drawGravel2Layer() {
+    const SCALE  = 0.28;
+    const STEP   = 170;
+    const JITTER = 55;
+    const rng    = mkRNG(78901);
+    for (let gy = 0; gy < MAP_H * TILE; gy += STEP) {
+      for (let gx = 0; gx < MAP_W * TILE; gx += STEP) {
+        const px = gx + (rng() - 0.5) * 2 * JITTER;
+        const py = gy + (rng() - 0.5) * 2 * JITTER;
+        this.add.image(px, py, 'gravel2')
+          .setScale(SCALE)
+          .setRotation(rng() * Math.PI * 2)
+          .setAlpha(0.4)
+          .setBlendMode(Phaser.BlendModes.ADD)
+          .setDepth(-140);
+      }
+    }
+  }
+
+  // gravel3 scattered on top of gravel2 (-130), distinct seed/step
+  _drawGravel3Layer() {
+    const SCALE  = 0.28;
+    const STEP   = 190;
+    const JITTER = 60;
+    const rng    = mkRNG(56789);
+    for (let gy = 0; gy < MAP_H * TILE; gy += STEP) {
+      for (let gx = 0; gx < MAP_W * TILE; gx += STEP) {
+        const px = gx + (rng() - 0.5) * 2 * JITTER;
+        const py = gy + (rng() - 0.5) * 2 * JITTER;
+        this.add.image(px, py, 'gravel3')
+          .setScale(SCALE)
+          .setRotation(rng() * Math.PI * 2)
+          .setAlpha(0.4)
+          .setBlendMode(Phaser.BlendModes.ADD)
+          .setDepth(-130);
+      }
+    }
+  }
+
+  // gravel4 scattered on top of gravel3 (-120), tighter step for fine surface detail
+  _drawGravel4Layer() {
+    const SCALE  = 0.28;
+    const STEP   = 130;
+    const JITTER = 40;
+    const rng    = mkRNG(13579);
+    for (let gy = 0; gy < MAP_H * TILE; gy += STEP) {
+      for (let gx = 0; gx < MAP_W * TILE; gx += STEP) {
+        const px = gx + (rng() - 0.5) * 2 * JITTER;
+        const py = gy + (rng() - 0.5) * 2 * JITTER;
+        this.add.image(px, py, 'gravel4')
+          .setScale(SCALE)
+          .setRotation(rng() * Math.PI * 2)
+          .setAlpha(0.35)
+          .setBlendMode(Phaser.BlendModes.ADD)
+          .setDepth(-120);
+      }
+    }
   }
 
   // ── occupancy (docs/adr/0009) ───────────────────────────────────────────────

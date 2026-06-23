@@ -2,6 +2,10 @@
 """
 Cut a sprite sheet into individual sprites by detecting connected non-transparent regions.
 
+Runs background removal (chroma key + alpha matting) on the source image first,
+so solid-colour backgrounds are stripped before the cut rather than ending up
+inside individual sprite PNGs.
+
 Each output PNG is a transparent canvas with ONLY the pixels belonging to that sprite —
 neighbouring sprites that fall inside the bounding box are zeroed out, so irregular /
 diagonal shapes never bleed into each other.
@@ -15,9 +19,14 @@ Usage:
 
 import sys
 from pathlib import Path
+
 import numpy as np
 from PIL import Image
 from scipy import ndimage
+
+# allow importing remove_bg from the same scripts/ directory
+sys.path.insert(0, str(Path(__file__).parent))
+from remove_bg import process_rgba
 
 
 def cut_sprites(
@@ -29,9 +38,22 @@ def cut_sprites(
     padding: int = 2,
 ):
     img = Image.open(input_path).convert("RGBA")
-    arr = np.array(img)
-    h, w = arr.shape[:2]
+    raw = np.array(img)
 
+    # skip background removal if the image already carries meaningful transparency
+    # (e.g. a sheet that was pre-cut or exported with transparency)
+    transparent_frac = (raw[:, :, 3] < 16).mean()
+    if transparent_frac < 0.05:
+        print(f"Removing background from {input_path} …")
+        arr = process_rgba(raw)
+        print(f"  Background removed.")
+    else:
+        print(f"  Image already has transparency ({transparent_frac:.1%}) — skipping BG removal.")
+        arr = raw
+
+    print(f"Cutting sprites …")
+
+    h, w = arr.shape[:2]
     mask = arr[:, :, 3] > alpha_threshold
 
     # dilation radius: merge_frac is the total gap to bridge; each side contributes half
@@ -41,7 +63,7 @@ def cut_sprites(
 
     # 8-connected labeling on dilated mask
     labeled, num = ndimage.label(dilated, structure=np.ones((3, 3)))
-    print(f"{input_path}: {num} raw components (dilation radius={radius}px)")
+    print(f"  {num} raw components (dilation radius={radius}px)")
 
     min_area = int(h * w * min_area_frac)
     out = Path(output_dir)
