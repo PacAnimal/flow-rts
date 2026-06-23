@@ -55,6 +55,8 @@ export class MapScene extends Phaser.Scene {
     this.load.image('factory', '/sprites/factory.png');
     this.load.image('worker', '/sprites/worker.png');
     for (const key of DECORATIONS.tree.sprites) this.load.image(key, `/sprites/${key}.png`);
+    for (const key of DECORATIONS.obstacle.sprites) this.load.image(key, `/sprites/decor2/${key}.png`);
+    for (const key of DECORATIONS.groundDecor.sprites) this.load.image(key, `/sprites/decor2/${key}.png`);
     for (const key of RESOURCES.crystals.sprites) this.load.image(key, `/sprites/${key}.png`);
   }
 
