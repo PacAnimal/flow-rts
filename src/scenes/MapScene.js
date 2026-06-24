@@ -57,7 +57,6 @@ const T_HILL_BASE = 3;   // indices 3..18
 const T_SHADOW    = 19;
 const T_RAMP      = 20;
 const T_RAMP_GND  = 21;
-const TOTAL_TILES = 22;
 
 function mkRNG(seed) {
   let s = ((seed ^ 0xdeadbeef) >>> 0) || 1;
@@ -72,6 +71,7 @@ export class MapScene extends Phaser.Scene {
 
   preload() {
     this.load.image('unit_shadow', '/sprites/unit_shadow.png');
+    this.load.image('tileset', '/sprites/terrain/tileset.png');
     this.load.image('command_center', '/sprites/command_center.png');
     this.load.image('barracks', '/sprites/barracks.png');
     this.load.image('factory', '/sprites/factory.png');
@@ -112,7 +112,6 @@ export class MapScene extends Phaser.Scene {
     this._enemySeq = 0;
     this._assignments = this._loadAssignments(); // { [runner.label]: flowId }, shared by buildings + units
 
-    this._makeTileset();
     const { tiles, isHill, isRamp } = this._generateTerrain();
     this._isHill = isHill;
     this._isRamp = isRamp;
@@ -470,161 +469,6 @@ export class MapScene extends Phaser.Scene {
     const occ = this._occupied.get(`${tx},${ty}`);
     if (occ && occ.blocking) return false;
     return !(this._isHill(tx, ty) && !this._isRamp(tx, ty));
-  }
-
-  // ── tileset ──────────────────────────────────────────────────────────────
-
-  _makeTileset() {
-    const canvas = document.createElement('canvas');
-    canvas.width  = TILE * TOTAL_TILES;
-    canvas.height = TILE;
-    const ctx = canvas.getContext('2d');
-
-    // grass tiles (0-2) are transparent — procedural ground shows through
-
-    // pre-generate all 16 hill autotile variants
-    for (let mask = 0; mask < 16; mask++) {
-      const ox      = (T_HILL_BASE + mask) * TILE;
-      const variant = (mask ^ (mask >> 2)) & 1; // stable 2-colour variation
-      this._drawHillBase(ctx, ox, variant);
-      if (mask & 1) this._drawNorthEdge(ctx, ox);
-      if (mask & 2) this._drawSouthCliff(ctx, ox);
-      if (mask & 4) this._drawEastCliff(ctx, ox);
-      if (mask & 8) this._drawWestCliff(ctx, ox);
-    }
-
-    this._drawShadowTile(ctx, T_SHADOW  * TILE);
-    this._drawRampTile(ctx,   T_RAMP    * TILE);
-    this._drawRampGndTile(ctx, T_RAMP_GND * TILE);
-
-    // extrude each tile by EXTRUDE px: stretch to cover border, then blit crisp interior on top
-    const SLOT = TILE + 2 * EXTRUDE;
-    const dst  = document.createElement('canvas');
-    dst.width  = SLOT * TOTAL_TILES;
-    dst.height = TILE + 2 * EXTRUDE;
-    const dctx = dst.getContext('2d');
-    for (let t = 0; t < TOTAL_TILES; t++) {
-      const sx = t * TILE, dx = t * SLOT;
-      dctx.drawImage(canvas, sx, 0, TILE, TILE, dx,           0,       SLOT, TILE + 2 * EXTRUDE); // stretched border
-      dctx.drawImage(canvas, sx, 0, TILE, TILE, dx + EXTRUDE, EXTRUDE, TILE, TILE);               // crisp interior
-    }
-
-    this.textures.addCanvas('tileset', dst);
-  }
-
-  _drawHillBase(ctx, ox, variant) {
-    ctx.fillStyle = variant ? '#68b440' : '#6aba45';
-    ctx.fillRect(ox, 0, TILE, TILE);
-    const g = mkRNG(ox * 17 + 3);
-    ctx.fillStyle = variant ? '#7ccc4e' : '#80ce52';
-    for (let i = 0; i < 12; i++) ctx.fillRect((ox + g() * TILE) | 0, (g() * TILE) | 0, 2, 2);
-    ctx.fillStyle = variant ? '#56983a' : '#58a038';
-    for (let i = 0; i < 8;  i++) ctx.fillRect((ox + g() * TILE) | 0, (g() * TILE) | 0, 2, 2);
-  }
-
-  // thin dark band — terrain drops to the north here
-  _drawNorthEdge(ctx, ox) {
-    ctx.fillStyle = '#1e3e10';
-    ctx.fillRect(ox, 0, TILE, 5);
-    ctx.fillStyle = 'rgba(0,0,0,0.35)';
-    ctx.fillRect(ox, 0, TILE, 3);
-  }
-
-  // full cliff face — most prominent, south-facing
-  _drawSouthCliff(ctx, ox) {
-    const splitY = (TILE * 0.54) | 0;
-    const cliffH = (TILE * 0.27) | 0;
-
-    ctx.fillStyle = '#c8ff80'; // bright crest highlight
-    ctx.fillRect(ox, splitY - 2, TILE, 2);
-
-    ctx.fillStyle = '#7a5c28'; // cliff face
-    ctx.fillRect(ox, splitY, TILE, cliffH);
-
-    // rock striations
-    const g = mkRNG(ox * 13 + 5);
-    ctx.fillStyle = 'rgba(0,0,0,0.2)';
-    for (let i = 0; i < 8; i++) ctx.fillRect((ox + g() * TILE) | 0, splitY, 2, cliffH);
-    ctx.fillStyle = 'rgba(255,255,255,0.12)';
-    for (let i = 0; i < 4; i++) ctx.fillRect((ox + g() * TILE) | 0, splitY, 1, cliffH);
-
-    ctx.fillStyle = '#3a2810'; // deep base shadow
-    ctx.fillRect(ox, splitY + cliffH, TILE, TILE - splitY - cliffH);
-  }
-
-  // narrow ridge strip on right edge: inner highlight → cliff → outer shadow
-  _drawEastCliff(ctx, ox) {
-    ctx.fillStyle = '#6ab040';  // inner highlight
-    ctx.fillRect(ox + TILE - 12, 0, 1, TILE);
-    ctx.fillStyle = '#7a5c28';  // cliff face
-    ctx.fillRect(ox + TILE - 11, 0, 7, TILE);
-    ctx.fillStyle = '#3a2810';  // outer shadow
-    ctx.fillRect(ox + TILE - 4,  0, 4, TILE);
-  }
-
-  // mirror of east
-  _drawWestCliff(ctx, ox) {
-    ctx.fillStyle = '#3a2810';  // outer shadow
-    ctx.fillRect(ox,      0, 4, TILE);
-    ctx.fillStyle = '#7a5c28';  // cliff face
-    ctx.fillRect(ox + 4,  0, 7, TILE);
-    ctx.fillStyle = '#6ab040';  // inner highlight
-    ctx.fillRect(ox + 11, 0, 1, TILE);
-  }
-
-  _drawShadowTile(ctx, ox) {
-    ctx.fillStyle = '#4a8c40';
-    ctx.fillRect(ox, 0, TILE, TILE);
-    const grad = ctx.createLinearGradient(ox, 0, ox, TILE * 0.5);
-    grad.addColorStop(0, 'rgba(0,0,0,0.52)');
-    grad.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(ox, 0, TILE, (TILE * 0.5) | 0);
-  }
-
-  // ramp: hill green on top, dirt path replaces cliff face on bottom
-  _drawRampTile(ctx, ox) {
-    this._drawHillBase(ctx, ox, 0);
-    const splitY = (TILE * 0.54) | 0;
-
-    ctx.fillStyle = '#c8ff80'; // crest line (matches south cliff)
-    ctx.fillRect(ox, splitY - 2, TILE, 2);
-
-    ctx.fillStyle = '#b89a60'; // dirt path
-    ctx.fillRect(ox, splitY, TILE, TILE - splitY);
-
-    // subtle path-side shadows (edges of the ramp opening)
-    ctx.fillStyle = 'rgba(0,0,0,0.28)';
-    ctx.fillRect(ox,              splitY + 2, 4, TILE - splitY - 2);
-    ctx.fillRect(ox + TILE - 4,   splitY + 2, 4, TILE - splitY - 2);
-
-    // dirt texture
-    const g = mkRNG(ox * 23 + 7);
-    ctx.fillStyle = 'rgba(0,0,0,0.1)';
-    for (let i = 0; i < 8; i++) {
-      ctx.fillRect((ox + 4 + g() * (TILE - 8)) | 0, (splitY + g() * (TILE - splitY)) | 0, 3, 2);
-    }
-  }
-
-  // ground tile directly below a ramp: path fading into grass
-  _drawRampGndTile(ctx, ox) {
-    ctx.fillStyle = '#4a8c40';
-    ctx.fillRect(ox, 0, TILE, TILE);
-
-    ctx.fillStyle = '#b89a60'; // path colour at top
-    ctx.fillRect(ox, 0, TILE, (TILE * 0.22) | 0);
-
-    const grad = ctx.createLinearGradient(ox, (TILE * 0.18) | 0, ox, (TILE * 0.45) | 0);
-    grad.addColorStop(0, 'rgba(74,140,64,0)');
-    grad.addColorStop(1, 'rgba(74,140,64,1)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(ox, (TILE * 0.18) | 0, TILE, (TILE * 0.32) | 0);
-
-    const g = mkRNG(ox * 41 + 2);
-    ctx.fillStyle = '#3a7030';
-    for (let i = 0; i < 15; i++) {
-      ctx.fillRect((ox + g() * TILE) | 0, ((TILE * 0.3 + g() * TILE * 0.7)) | 0, 2, 2);
-    }
   }
 
   // ── terrain generation ────────────────────────────────────────────────────
