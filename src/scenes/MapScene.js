@@ -203,7 +203,7 @@ export class MapScene extends Phaser.Scene {
       this._updateScenario(delta);
 
       for (const unit of this.units) this._placeUnit(unit);
-      for (const b of this.buildings) b.syncHealthBar();
+      for (const b of this.buildings) { b.syncHealthBar(); this._drawBuildingProgress(b); }
       this._checkObjective();
     }
 
@@ -310,6 +310,7 @@ export class MapScene extends Phaser.Scene {
       this._spend(def.cost);
       state.started = true;
       state.elapsed = 0;
+      state.duration = def.buildTime * 1000; // read by the building progress bar + inspector
     }
     state.elapsed += dt;
     if (state.elapsed < def.buildTime * 1000) return false; // building…
@@ -1373,6 +1374,32 @@ void main(void){
     g.clear();
     g.fillStyle(0x12100a, 1).fillRect(x, y, w, h);
     g.fillStyle(color, 1).fillRect(x, y, w * frac, h);
+    g.setDepth(2e6).setVisible(true);
+  }
+
+  // Draw a Building's production progress bar above it while a Train Action is building a Unit
+  // (docs/adr/0013) — blue, filling over the Unit type's buildTime. Read from the Run's live
+  // scratch state (started/elapsed/duration set by _train), so it appears only once production is
+  // funded and under way, not while the Train is still blocked waiting to afford the cost.
+  _drawBuildingProgress(building) {
+    let frac = -1;
+    const run = building.run;
+    if (run && run.status === 'running') {
+      const node = this._resolveFlow(run.flowId)?.getNode(run.current);
+      const st = run.state;
+      if (node && node.kind === 'Train' && st && st.started && st.duration > 0) {
+        frac = st.elapsed / st.duration;
+      }
+    }
+    if (frac < 0) { building._progressBar?.setVisible(false); return; }
+    const g = building._progressBar || (building._progressBar = this.add.graphics());
+    frac = Math.max(0, Math.min(1, frac));
+    const w = building.tileW * TILE * 0.7, h = 6;
+    const x = building._cx - w / 2;
+    const y = building.sprite.y - building.sprite.displayHeight - 16; // just above the Health bar
+    g.clear();
+    g.fillStyle(0x0a1626, 1).fillRect(x, y, w, h);
+    g.fillStyle(0x4aa3ff, 1).fillRect(x, y, w * frac, h);
     g.setDepth(2e6).setVisible(true);
   }
 
