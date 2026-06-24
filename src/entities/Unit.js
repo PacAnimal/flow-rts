@@ -32,6 +32,11 @@ export class Unit {
     this._applyScale();
     this.sprite.setDepth(y);
 
+    // thin dark silhouette glow — 1px edge, feathers over ~2px (preFX = WebGL only)
+    if (this.sprite.preFX) {
+      this.sprite.preFX.addGlow(0x080808, 1.5, 0, false, 0.15, 4);
+    }
+
     // Runner state: Faction + Health (CONTEXT.md).
     attachHealth(this, def ? def.maxHealth : 1, faction);
   }

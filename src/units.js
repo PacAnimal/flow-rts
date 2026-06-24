@@ -27,8 +27,8 @@ export const UNIT_TYPES = {
     range: 0,
     aggroRadius: 0,
     attackCooldown: 0,
-    carryCapacity: 10,    // one crystal gather (docs/adr/0008)
-    cost: { crystals: 50 },
+    carryCapacity: 10,    // one alloy gather (docs/adr/0008)
+    cost: { alloys: 50 },
     buildTime: 6,         // seconds the producing Building stands to make one
     producedBy: 'command_center',
   },
@@ -41,7 +41,7 @@ export const UNIT_TYPES = {
     aggroRadius: 6,       // Tiles — peels off Attack-Move to engage within this (ADR-0012)
     attackCooldown: 1.0,  // seconds between attacks
     carryCapacity: 0,
-    cost: { crystals: 50 },
+    cost: { alloys: 50 },
     buildTime: 5,
     producedBy: 'barracks',
   },

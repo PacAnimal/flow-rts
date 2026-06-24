@@ -43,7 +43,7 @@ const LABEL_FLOW_STYLE = {
 // Building labels reuse the name style.
 const LABEL_STYLE = LABEL_NAME_STYLE;
 
-// Tiles kept clear of crystals/decorations around the command center, beyond its footprint,
+// Tiles kept clear of alloys/decorations around the command center, beyond its footprint,
 // so the start area stays open (docs/adr/0009).
 const START_CLEARANCE = 3;
 
@@ -89,7 +89,9 @@ export class MapScene extends Phaser.Scene {
     for (const key of DECORATIONS.tree.sprites) this.load.image(key, `/sprites/${key}.png`);
     for (const key of DECORATIONS.obstacle.sprites) this.load.image(key, `/sprites/decor2/${key}.png`);
     for (const key of DECORATIONS.groundDecor.sprites) this.load.image(key, `/sprites/decor2/${key}.png`);
-    for (const key of RESOURCES.crystals.sprites) this.load.image(key, `/sprites/${key}.png`);
+    for (const key of RESOURCES.alloys.sprites)   this.load.image(key, `/sprites/${key}.png`);
+    for (const key of RESOURCES.sludge.sprites)   this.load.image(key, `/sprites/${key}.png`);
+    for (const key of RESOURCES.biopulp.sprites)  this.load.image(key, `/sprites/${key}.png`);
   }
 
   create() {
@@ -127,7 +129,9 @@ export class MapScene extends Phaser.Scene {
     const groundOnly = new URLSearchParams(window.location.search).has('groundOnly');
     if (!groundOnly) this._buildTilemap(tiles);
     if (!groundOnly) this._spawnBuildings();   // reserve command-center footprint + start clearance first
-    if (!groundOnly) this._placeCrystals();    // clustered crystal Deposits (docs/adr/0009)
+    if (!groundOnly) this._placeAlloys();      // clustered alloy Deposits (docs/adr/0009)
+    if (!groundOnly) this._placeSludge();      // sludge pools bubbling up from the ground (docs/adr/0009)
+    if (!groundOnly) this._placeCarcasses();   // pre-placed biopulp deposits (docs/adr/0009)
     if (!groundOnly) this._placeDecorations(); // trees — scattered, no overlap (docs/adr/0009)
     this._critterFlowId = this._ensureCritterFlow();
     if (!groundOnly) this._spawnUnits();
@@ -277,6 +281,8 @@ export class MapScene extends Phaser.Scene {
 
     if (this.units.includes(runner)) {
       this.units = this.units.filter((u) => u !== runner);
+      // Non-player biological units leave a harvestable biopulp Deposit (CONTEXT.md).
+      if (runner.faction !== FACTION.PLAYER) this._spawnBiopulpDeposit(runner.tx, runner.ty);
     } else if (this.buildings.includes(runner)) {
       // Free the Building's Footprint so Units can path/stand there (docs/adr/0009).
       for (let dy = 0; dy < runner.tileH; dy++)
@@ -805,17 +811,17 @@ void main(void){
       }
   }
 
-  // ── crystals ──────────────────────────────────────────────────────────────
+  // ── alloys ────────────────────────────────────────────────────────────────
 
-  // Crystal Deposits spawn in contiguous blobs of 3–6: a seed Tile plus random adjacent free
+  // Alloy Deposits spawn in contiguous blobs of 3–6: a seed Tile plus random adjacent free
   // Tiles, so each cluster reads as one tight patch (docs/adr/0009).
-  _placeCrystals() {
+  _placeAlloys() {
     const r = mkRNG(1337);
 
     // A guaranteed starter cluster: the clear Tile nearest map centre (just outside the
-    // command-center clearance), so Workers always have crystals to gather near the base.
+    // command-center clearance), so Workers always have alloys to gather near the base.
     const starter = this._nearestClearTile((MAP_W / 2) | 0, (MAP_H / 2) | 0);
-    if (starter) this._growCrystalCluster(starter, 4 + ((r() * 3) | 0), r); // 4–6
+    if (starter) this._growAlloyCluster(starter, 4 + ((r() * 3) | 0), r); // 4–6
 
     const CLUSTERS = 22;
     for (let i = 0; i < CLUSTERS; i++) {
@@ -825,11 +831,11 @@ void main(void){
         const ty = (r() * (MAP_H - 10) + 5) | 0;
         if (this._groundClear(tx, ty)) seed = { x: tx, y: ty };
       }
-      if (seed) this._growCrystalCluster(seed, 3 + ((r() * 4) | 0), r);
+      if (seed) this._growAlloyCluster(seed, 3 + ((r() * 4) | 0), r);
     }
   }
 
-  // Spiral outward from (cx,cy) for the closest clear Tile — used to anchor the starter crystal
+  // Spiral outward from (cx,cy) for the closest clear Tile — used to anchor the starter alloy
   // cluster just beyond the reserved clearance around the command center.
   _nearestClearTile(cx, cy) {
     for (let radius = 0; radius <= 25; radius++)
@@ -841,15 +847,15 @@ void main(void){
     return null;
   }
 
-  _growCrystalCluster(seed, target, r) {
+  _growAlloyCluster(seed, target, r) {
     const placed = [];
     const place = (tx, ty) => {
       const img = this.add.image(tx * TILE + TILE * 0.5, ty * TILE + TILE * 0.5,
-        RESOURCES.crystals.sprites[(r() * RESOURCES.crystals.sprites.length) | 0]);
+        RESOURCES.alloys.sprites[(r() * RESOURCES.alloys.sprites.length) | 0]);
       img.setOrigin(0.5, 0.5);
       img.setScale(TILE * (1.5 + r() * 1.0) / Math.max(img.width, img.height));
       img.setDepth(ty * TILE + TILE); // sort as if grounded at the Tile's bottom edge
-      this._addDeposit('crystals', tx, ty, img); // registers Deposit + occupancy
+      this._addDeposit('alloys', tx, ty, img); // registers Deposit + occupancy
       placed.push({ x: tx, y: ty });
     };
     place(seed.x, seed.y);
@@ -866,6 +872,88 @@ void main(void){
       const pick = frontier[(r() * frontier.length) | 0];
       place(pick.x, pick.y);
     }
+  }
+
+  // ── sludge ────────────────────────────────────────────────────────────────
+
+  // Sludge Deposits spawn in flat pools of 3–6: same blob growth as alloys but with a
+  // different RNG seed so the two resources scatter independently (docs/adr/0009).
+  _placeSludge() {
+    const r = mkRNG(2718);
+    const CLUSTERS = 18;
+    for (let i = 0; i < CLUSTERS; i++) {
+      let seed = null;
+      for (let tries = 0; tries < 30 && !seed; tries++) {
+        const tx = (r() * (MAP_W - 10) + 5) | 0;
+        const ty = (r() * (MAP_H - 10) + 5) | 0;
+        if (this._groundClear(tx, ty)) seed = { x: tx, y: ty };
+      }
+      if (seed) this._growSludgeCluster(seed, 3 + ((r() * 4) | 0), r);
+    }
+  }
+
+  _growSludgeCluster(seed, target, r) {
+    const placed = [];
+    const place = (tx, ty) => {
+      const img = this.add.image(tx * TILE + TILE * 0.5, ty * TILE + TILE * 0.5,
+        RESOURCES.sludge.sprites[(r() * RESOURCES.sludge.sprites.length) | 0]);
+      img.setOrigin(0.5, 0.5);
+      img.setScale(TILE * (1.5 + r() * 1.0) / Math.max(img.width, img.height));
+      img.setDepth(ty * TILE + TILE);
+      this._addDeposit('sludge', tx, ty, img);
+      placed.push({ x: tx, y: ty });
+    };
+    place(seed.x, seed.y);
+    const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    while (placed.length < target) {
+      const frontier = [];
+      for (const p of placed)
+        for (const [dx, dy] of DIRS) {
+          const nx = p.x + dx, ny = p.y + dy;
+          if (this._groundClear(nx, ny) && !frontier.some((f) => f.x === nx && f.y === ny))
+            frontier.push({ x: nx, y: ny });
+        }
+      if (!frontier.length) break;
+      const pick = frontier[(r() * frontier.length) | 0];
+      place(pick.x, pick.y);
+    }
+  }
+
+  // ── biopulp ───────────────────────────────────────────────────────────────
+
+  // Scatter pre-existing carcasses so the player has biopulp to harvest before the first wave
+  // arrives. More appear dynamically as enemy and critter units die (_spawnBiopulpDeposit).
+  _placeCarcasses() {
+    const r = mkRNG(7777);
+    const COUNT = 20;
+    for (let i = 0; i < COUNT; i++) {
+      for (let tries = 0; tries < 30; tries++) {
+        const tx = (r() * (MAP_W - 10) + 5) | 0;
+        const ty = (r() * (MAP_H - 10) + 5) | 0;
+        if (!this._groundClear(tx, ty)) continue;
+        const sprites = RESOURCES.biopulp.sprites;
+        const key = sprites[(r() * sprites.length) | 0];
+        const img = this.add.image(tx * TILE + TILE * 0.5, ty * TILE + TILE * 0.5, key);
+        img.setOrigin(0.5, 0.5);
+        img.setScale(TILE * (1.5 + r() * 1.0) / Math.max(img.width, img.height));
+        img.setDepth(ty * TILE + TILE);
+        this._addDeposit('biopulp', tx, ty, img);
+        break;
+      }
+    }
+  }
+
+  // Spawn a biopulp Deposit at a Tile when a non-player unit dies. Skipped if the Tile is
+  // already occupied (two units dying in the same spot, a deposit already there, etc.).
+  _spawnBiopulpDeposit(tx, ty) {
+    if (this._depositByTile.has(`${tx},${ty}`)) return;
+    const sprites = RESOURCES.biopulp.sprites;
+    const key = sprites[(Math.random() * sprites.length) | 0];
+    const img = this.add.image(tx * TILE + TILE * 0.5, ty * TILE + TILE * 0.5, key);
+    img.setOrigin(0.5, 0.5);
+    img.setScale(TILE * (1.5 + Math.random() * 1.0) / Math.max(img.width, img.height));
+    img.setDepth(ty * TILE + TILE);
+    this._addDeposit('biopulp', tx, ty, img);
   }
 
   // ── decorations (docs/adr/0009) ─────────────────────────────────────────────
@@ -1056,7 +1144,7 @@ void main(void){
       case 'cargo_empty':       return !unit.cargo || unit.cargo.amount <= 0;
       case 'deposit_adjacent':  return this._hasAdjacentDeposit(unit);
       case 'at_command_center': return this._adjacentToCommandCenter(unit);
-      case 'stockpile_gte':     return (this._stockpile.crystals || 0) >= (params.amount || 0);
+      case 'stockpile_gte':     return (this._stockpile.alloys || 0) >= (params.amount || 0);
       case 'enemy_in_range':    return this._enemyWithin(unit, getUnitType(unit.type)?.range || 0);
       case 'enemy_nearby':      return this._enemyWithin(unit, params.amount || params.radius || 0);
       default:                  return false;
@@ -1387,7 +1475,7 @@ void main(void){
   }
 
   // Sync a Unit's sprite + label to its logical {x,y} (feet position), keeping depth = y so
-  // it sorts correctly against trees/crystals/other Units.
+  // it sorts correctly against trees/alloys/other Units.
   _placeUnit(unit) {
     if (unit._vel) unit.updateDirection(unit._vel.x, unit._vel.y);
     unit.sprite.setPosition(unit.x, unit.y);

@@ -12,7 +12,7 @@ export const CONDITIONS = {
   stockpile_gte: {
     id: 'stockpile_gte',
     label: 'Stockpile ≥ N',
-    // Implicitly Crystals for now (the only Resource); a Resource selector waits for a second.
+    // Implicitly Alloys for now (the only Resource); a Resource selector waits for a second.
     args: [{ id: 'amount', type: 'number', label: 'Amount', min: 0, step: 10 }],
   },
   // Combat Conditions (docs/adr/0012): an Enemy within attack range, or within an authored
