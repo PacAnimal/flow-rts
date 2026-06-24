@@ -23,6 +23,7 @@ import { DECORATIONS } from '../decorations.js';
 import { FACTION, getUnitType, getBuildingType } from '../units.js';
 import { applyDamage } from '../entities/runner.js';
 import { CombatSystem } from '../combat.js';
+import { AttackEffects } from '../effects.js';
 import { SCENARIO, enemyFlowModel, critterFlowModel } from '../scenario.js';
 import '../flow/editor.css'; // shared overlay chrome — styles the Start/Pause button
 const MAP_W = 120;
@@ -149,12 +150,16 @@ export class MapScene extends Phaser.Scene {
 
     // Combat layer (docs/adr/0012): acquires targets, drives chase/stop goals into the movement
     // system, and applies Damage. Engine-agnostic like movement — it reaches the game by callback.
+    // Transient attack visuals (a laser bolt for ranged, a claw slash for melee) — fired here
+    // because onAttack is exactly the moment a blow lands; the effect is render-only.
+    this._effects = new AttackEffects(this);
     this._combat = new CombatSystem({
       targetsFor: (unit) => this._targetsFor(unit),
       onAttack: (attacker, target) => {
-        const dmg = getUnitType(attacker.type)?.damage || 0;
+        const def = getUnitType(attacker.type);
+        this._effects.show(attacker, target, def);
         this._log(`${attacker.label} attacks ${target.label}`);
-        this._applyDamage(target, dmg);
+        this._applyDamage(target, def?.damage || 0);
       },
       movement: this._movement,
     });
