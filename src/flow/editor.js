@@ -5,6 +5,7 @@
 // camera-drag with no extra coordination. See CONTEXT.md and docs/adr/0001.
 
 import './editor.css';
+import { createStore } from './store.js';
 import { getNodeKind, getParams, nodeKindsForRunner } from './nodeKinds.js';
 import { CONDITIONS, getCondition } from '../conditions.js';
 import { UNIT_TYPES } from '../units.js';
@@ -21,6 +22,10 @@ export class FlowEditor {
     this.nodeEls = new Map(); // nodeId -> node element
     this.portEls = new Map(); // `${nodeId}:${portId}` -> port dot element
     this._build();
+    // Reactive loop: structural edits go through commit(), which bumps this store; the
+    // subscription re-renders. subscribe fires once now (model is null → _render no-ops).
+    this.store = createStore({ rev: 0 });
+    this.store.subscribe(() => this._render());
   }
 
   mount(parent = document.body) {
@@ -43,9 +48,8 @@ export class FlowEditor {
     if (!this.currentId || !this.library.get(this.currentId)) {
       this.setFlow(this.library.list()[0].id);
     } else {
-      this._renderWires(); // re-measure in case the last render happened while hidden
+      this._render(); // re-measure now that we're visible (getBoundingClientRect needs layout)
     }
-    this._renderLibrary();
   }
 
   hide() { this.visible = false; this._applyVisibility(); }
@@ -177,16 +181,39 @@ export class FlowEditor {
     this.model = entry.model;
     this.flowName.textContent = `${entry.name}  ·  ${entry.model.targetKind} flow`;
     this._renderPalette();
-    this._renderAll();
-    this._renderLibrary();
+    this._render();
   }
 
-  _renderAll() {
-    for (const nodeEl of this.nodeEls.values()) nodeEl.remove();
-    this.nodeEls.clear();
-    this.portEls.clear();
-    for (const node of this.model.nodes) this._addNodeEl(node);
+  // The single mutation path: apply a change to the model, persist it, then bump the store
+  // so the subscription re-renders. Structural edits should go through here only — routing
+  // every change through one place means no handler can forget to save or to re-render.
+  commit(mutator) {
+    mutator(this.model);
+    this.library.save();
+    this.store.update((s) => ({ rev: s.rev + 1 }));
+  }
+
+  // Idempotent render: reconcile the canvas DOM against the model, keyed by node id. Existing
+  // nodes stay put (only their position is synced), vanished nodes are torn down, new ones are
+  // built. Cheap to call after any change, so it is the only render path.
+  _render() {
+    if (!this.model) return;
+    const present = new Set(this.model.nodes.map((n) => n.id));
+    for (const [id, nodeEl] of this.nodeEls) {
+      if (present.has(id)) continue;
+      nodeEl.remove();
+      this.nodeEls.delete(id);
+      for (const key of [...this.portEls.keys()]) {
+        if (key.startsWith(`${id}:`)) this.portEls.delete(key);
+      }
+    }
+    for (const node of this.model.nodes) {
+      let nodeEl = this.nodeEls.get(node.id);
+      if (!nodeEl) nodeEl = this._addNodeEl(node);
+      nodeEl.style.transform = `translate(${node.x}px, ${node.y}px)`;
+    }
     this._renderWires();
+    this._renderLibrary();
   }
 
   // ── geometry helpers ─────────────────────────────────────────────────────
@@ -248,6 +275,7 @@ export class FlowEditor {
 
     this.canvasEl.appendChild(nodeEl);
     this.nodeEls.set(node.id, nodeEl);
+    return nodeEl;
   }
 
   // A Parameter row: a label plus an editor chosen by the param's type (ADR-0004). A 'tile'
@@ -283,10 +311,9 @@ export class FlowEditor {
     for (const o of options) select.appendChild(el('option', null, o.label)).value = o.value;
     select.value = (node.params && node.params[param.id]) || '';
     select.addEventListener('pointerdown', (e) => e.stopPropagation());
-    select.addEventListener('change', () => {
-      this.model.setParam(node.id, param.id, select.value || null);
-      this.library.save();
-    });
+    select.addEventListener('change', () =>
+      this.commit((m) => m.setParam(node.id, param.id, select.value || null)),
+    );
     row.appendChild(select);
     return row;
   }
@@ -314,8 +341,7 @@ export class FlowEditor {
     };
 
     select.addEventListener('change', () => {
-      this._setCondition(node, select.value || null);
-      this.library.save();
+      this.commit(() => this._setCondition(node, select.value || null));
       renderArgs();
     });
 
@@ -367,13 +393,12 @@ export class FlowEditor {
     // Don't let pointer/keys on the input start a node-drag or trigger editor shortcuts.
     input.addEventListener('pointerdown', (e) => e.stopPropagation());
     input.addEventListener('keydown', (e) => e.stopPropagation());
-    const commit = () => {
+    const persist = () => {
       const raw = input.value.trim();
       const num = raw === '' ? null : Number(raw);
-      this.model.setParam(node.id, param.id, Number.isFinite(num) ? num : null);
-      this.library.save();
+      this.commit((m) => m.setParam(node.id, param.id, Number.isFinite(num) ? num : null));
     };
-    input.addEventListener('change', commit);
+    input.addEventListener('change', persist);
     return input;
   }
 
@@ -385,8 +410,7 @@ export class FlowEditor {
       current: (node.params && node.params[param.id]) || null,
       prompt: `Click a tile to set ${param.label} — Esc to cancel`,
       onPicked: (tile) => {
-        this.model.setParam(node.id, param.id, tile);
-        this.library.save();
+        this.commit((m) => m.setParam(node.id, param.id, tile));
         render();
         reopen();
       },
@@ -395,16 +419,7 @@ export class FlowEditor {
   }
 
   _removeNode(id) {
-    this.model.removeNode(id);
-    const nodeEl = this.nodeEls.get(id);
-    if (nodeEl) nodeEl.remove();
-    this.nodeEls.delete(id);
-    for (const key of [...this.portEls.keys()]) {
-      if (key.startsWith(`${id}:`)) this.portEls.delete(key);
-    }
-    this._renderWires();
-    this._renderLibrary(); // node count changed
-    this.library.save();
+    this.commit((m) => m.removeNode(id));
   }
 
   // ── wires ────────────────────────────────────────────────────────────────
@@ -421,7 +436,7 @@ export class FlowEditor {
       const hit = document.createElementNS(SVG_NS, 'path');
       hit.setAttribute('d', d);
       hit.classList.add('wire-hit');
-      hit.addEventListener('click', () => { this.model.disconnect(c.id); this._renderWires(); this.library.save(); });
+      hit.addEventListener('click', () => this.commit((m) => m.disconnect(c.id)));
       // hit path first so the `.wire-hit:hover + .wire` highlight works.
       this.wireGroup.appendChild(hit);
       this.wireGroup.appendChild(path);
@@ -449,11 +464,7 @@ export class FlowEditor {
       const inside = ev.clientX >= c.left && ev.clientX <= c.right && ev.clientY >= c.top && ev.clientY <= c.bottom;
       if (!inside || !this.model) return;
       const p = this._canvasPoint(ev.clientX, ev.clientY);
-      const node = this.model.addNode(kind, p.x - 60, p.y - 14);
-      this._addNodeEl(node);
-      this._renderWires();
-      this._renderLibrary();
-      this.library.save();
+      this.commit((m) => m.addNode(kind, p.x - 60, p.y - 14));
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -478,7 +489,8 @@ export class FlowEditor {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       nodeEl.classList.remove('dragging');
-      this.library.save(); // persist the moved position
+      // The drag mutated the model live for smoothness; commit just persists + reconciles.
+      this.commit(() => {});
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -505,11 +517,10 @@ export class FlowEditor {
       const out = source.dir === 'out' ? source : target.dir === 'out' ? target : null;
       const inn = source.dir === 'in' ? source : target.dir === 'in' ? target : null;
       if (!out || !inn) return;
-      const conn = this.model.connect(
-        { node: out.node, port: out.port },
-        { node: inn.node, port: inn.port },
+      // connect() returns null for an invalid pairing — committing then is a harmless no-op.
+      this.commit((m) =>
+        m.connect({ node: out.node, port: out.port }, { node: inn.node, port: inn.port }),
       );
-      if (conn) { this._renderWires(); this.library.save(); }
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
