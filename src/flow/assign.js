@@ -22,8 +22,17 @@ function ensureDom() {
   document.body.appendChild(overlay);
 }
 
+// Phaser binds pointer listeners at the window level (docs/adr/0001), so while this modal is
+// open a click on a flow row would otherwise fall through to the Runner sprite behind it and
+// re-open the overlay for whatever Unit sat under the cursor. Mirror the Flow editor: announce
+// open/close so MapScene can disable map input for the overlay's lifetime.
+function setVisible(open) {
+  window.dispatchEvent(new CustomEvent('assign-overlay-visibility', { detail: { open } }));
+}
+
 function close() {
   if (overlay) overlay.classList.add('hidden');
+  setVisible(false);
 }
 
 // Open the assign overlay for a `runner` (Unit or Building). Only Flows whose targetKind matches
@@ -76,4 +85,5 @@ export function openAssignOverlay(unit, library, targetKind, onAssigned, buildin
 
   panel.appendChild(list);
   overlay.classList.remove('hidden');
+  setVisible(true);
 }

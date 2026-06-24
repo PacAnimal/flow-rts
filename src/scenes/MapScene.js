@@ -1651,6 +1651,16 @@ void main(void){
     this.input.on('pointerup', endDrag);
     this.input.on('pointerupoutside', endDrag);
 
+    // The assign-Flow modal is also a DOM overlay over the canvas: disable map input while it's
+    // open so clicks on a flow row don't fall through to the Runner behind it (docs/adr/0001).
+    // The overlay opens during gameobjectup (a pointerup), so the matching endDrag never runs —
+    // clear the dangling drag here, or the map would pan on mouse-move after the overlay closes.
+    window.addEventListener('assign-overlay-visibility', (e) => {
+      this.input.enabled = !e.detail.open;
+      if (e.detail.open) { drag = null; this._dragMoved = false; }
+      this.game.canvas.style.cursor = this._pick ? 'crosshair' : 'grab';
+    });
+
     // Click a Runner → open the assign-flow overlay, filtered to that Runner's kind (docs/adr/
     // 0015). Ignore while picking or after a drag. A Unit picks Unit-Flows; a Building, Building-
     // Flows. Enemy Units are not the player's to command.
