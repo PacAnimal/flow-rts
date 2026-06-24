@@ -8,32 +8,52 @@ then run them. This document is the glossary for that domain. It is not a spec.
 
 **Flow**:
 A reusable node graph defining a behaviour. Flows live in the Library and are assigned to
-Units to control them. A Flow is a shared *definition*: assigning one Flow to several Units
-means they all run the same definition (edit it once, all run the change), while each Unit
-keeps its own execution state. The editor edits one Flow at a time.
+Runners to control them. A Flow is a shared *definition*: assigning one Flow to several
+Runners means they all run the same definition (edit it once, all run the change), while each
+Runner keeps its own execution state. Each Flow **targets one Runner kind** (Unit or Building),
+which fixes the Actions its palette offers and limits which Runners it can be assigned to — a
+Building-Flow cannot be assigned to a Unit. The editor edits one Flow at a time.
 _Avoid_: graph, script, program, behaviour tree
 
 **Library**:
 The player's collection of authored Flows. The source from which Flows are assigned to Units.
 _Avoid_: list, catalogue, project
 
+**Runner**:
+Any on-map thing that can be assigned a Flow and hold a Run — the thing a Flow runs *on*.
+Units and Buildings are both Runners; the Assignment, Run, cursor, and OnStart machinery is
+defined on the Runner, not on Units specifically. What a Runner can *do* depends on its kind:
+the interpreter passes the Runner to each node's executor (which the code calls `runner`), and
+the world exposes a kind-appropriate action set (Units move/gather; Buildings produce). A
+Runner runs at most one Flow at a time.
+_Avoid_: host, agent, actor, entity, owner
+
+**Faction**:
+The side a Runner belongs to. A survival level has two — **Player** and **Enemy** — with room
+for more later (e.g. a neutral side, or further sides once multiplayer exists). Faction decides
+friend from foe for combat and targeting. The player authors Flows (in the Library) only for
+Player Runners; Enemy Runners run Flows too, but those are supplied by the level, not the Library.
+_Avoid_: side, team, owner, allegiance
+
 **Unit**:
-A controllable entity on the map. A Unit runs at most one assigned Flow at a time (its
-current behaviour); assigning a new Flow replaces the old one. Many Units may share one Flow.
+A controllable, *moving* entity on the map — a kind of Runner. A Unit runs at most one assigned
+Flow at a time (its current behaviour); assigning a new Flow replaces the old one. Many Units
+may share one Flow. Distinct from a Building (the immobile kind of Runner): only Units move,
+steer around crowds, and carry Cargo.
 _Avoid_: entity, actor, agent, sprite
 
 **Assignment**:
-The link between a Unit and the single Flow it currently runs. Created when a Flow is
-assigned to a Unit; replaced (not stacked) when another Flow is assigned.
+The link between a Runner and the single Flow it currently runs. Created when a Flow is
+assigned to a Runner; replaced (not stacked) when another Flow is assigned.
 _Avoid_: binding, attachment
 
 **Run**:
-A Unit's live execution of its assigned Flow — the *instance* to the Flow's *definition*.
-A Run holds where the Unit currently is within the Flow and is one of: running (working
+A Runner's live execution of its assigned Flow — the *instance* to the Flow's *definition*.
+A Run holds where the Runner currently is within the Flow and is one of: running (working
 through the Flow), idle (no Flow, or the Flow finished), or halted (its current Node was
 removed by an edit). Distinct from the Assignment (which Flow) and the Flow (the shared
 definition): assigning a Flow starts a fresh Run; re-assigning discards the old one. A Run
-is per-Unit and momentary — it is not saved, so reloading restarts every Run from scratch.
+is per-Runner and momentary — it is not saved, so reloading restarts every Run from scratch.
 _Avoid_: process, thread, session, instance
 
 **Node**:
@@ -42,7 +62,7 @@ _Avoid_: block, box, step
 
 **Event**:
 A node kind that starts execution when something happens (e.g. OnStart, which fires once
-per Unit the moment its Flow begins running on that Unit — not a single global game start).
+per Runner the moment its Flow begins running on that Runner — not a single global game start).
 An Event has an outgoing Exec port and no incoming Exec port — execution begins here.
 _Avoid_: trigger (reserved sense below), hook, signal
 
@@ -52,10 +72,12 @@ an incoming Exec port and an outgoing Exec port so it can be chained after other
 _Avoid_: command, task, operation
 
 **Flow Control**:
-A node kind that directs execution between other nodes (e.g. branch, delay, loop), or
-acts on the Flow system itself — notably a future Assign Flow node that, when executed,
-assigns another Flow to a target Unit. Wait (holds execution for a duration) and Branch (routes
-to one of two outputs by a Condition) exist; loop and Assign Flow remain reserved in the model.
+A node kind that directs execution between other nodes (e.g. branch, delay), or acts on the
+Flow system itself. Wait (holds execution for a duration) and Branch (routes to one of two
+outputs by a Condition) exist. A **loop** is not a node: it is a Connection wired *backward*
+to an earlier Node, gated by a Branch and paced by a Wait (an all-instant back-edge with no
+waiting Node spins and ends the Run, so a loop must contain one). Assigning a Flow to another
+Runner is, for now, a capability of the Train Action rather than its own node.
 _Avoid_: logic node, control node
 
 **Branch**:
@@ -141,9 +163,32 @@ level spawns and never overlap one another or any other occupied Tiles. Distinct
 _Avoid_: prop, scenery, obstacle (an obstacle is just a blocking Decoration, not its own thing)
 
 **Building**:
-A player structure occupying a Footprint of Tiles that it blocks, so Units path around it. The
-Command Center is the first Building and the place a Worker delivers Cargo to grow the Stockpile.
+A player structure occupying a Footprint of Tiles that it blocks, so Units path around it — the
+immobile kind of Runner. The Command Center is the first Building and the place a Worker delivers
+Cargo to grow the Stockpile. Unlike a Unit, a Building does not move; its Flow drives a
+building-scoped action set (e.g. producing Units) rather than movement.
 _Avoid_: structure, depot, base
+
+**Enemy**:
+A Runner whose Faction is Enemy — not its own kind of thing. A spawned attacker is an Enemy
+Unit; a hostile spawner would be an Enemy Building. Enemies run Flows on the same interpreter
+as Player Runners, but their Flows are authored as level data, never appear in the Library, and
+are not editable in the editor.
+_Avoid_: mob, monster, hostile, AI
+
+**Health**:
+How much damage a Runner can take before it is destroyed — a current/max pair carried by every
+Runner, Units and Buildings alike. At 0 the Runner is **destroyed**: removed from the map (its
+Footprint freed, for a Building) and its Run ends. Death is just Health reaching 0, not a
+separate Run status. A Runner's max Health (and its other combat numbers) come from its type's
+data table, not from any Node.
+_Avoid_: hit points, HP, life, durability
+
+**Damage**:
+The amount an attack subtracts from a target Runner's Health. A Unit's Damage, range, and attack
+cooldown are properties of its type (a pure data table, as gather rates are on the Resource type
+in ADR-0008), not Parameters on any Node.
+_Avoid_: hurt, hit, DPS, power
 
 **Resource**:
 A type of gatherable material that Workers collect — Crystals today; more (e.g. Gas, Wood)
@@ -169,6 +214,28 @@ _Avoid_: inventory, load, payload, stockpile (that is the player-wide store), ho
 
 **Stockpile**:
 The player's accumulated Resources, kept per Resource type and shown in the materials panel. It
-grows only when a Worker delivers its Cargo at a Command Center; nothing spends it yet. Distinct
-from Cargo (one Unit's load): the Stockpile is the whole player's total.
+grows when a Worker delivers its Cargo at a Command Center and is spent by production (a Train
+node deducts a Unit's cost from it). Distinct from Cargo (one Unit's load): the Stockpile is the
+whole player's total.
 _Avoid_: bank, treasury, materials (the UI's label for it), resources (a Resource is the type)
+
+**Scenario**:
+A level defined as data — the threat and the victory rules the player plays *against* and does
+not author. A Scenario owns its Waves and its Objective. It is the counterpart to the Library:
+the Library is what the player authors (Flows for Player Runners); the Scenario is the fixed
+challenge the world enforces. Distinct from a Flow — a Scenario is not a node graph and runs on
+no Runner.
+_Avoid_: level (the in-world map), mission, map, stage
+
+**Wave**:
+A timed group of Enemy spawns within a Scenario: a number of Enemy Units of a type, appearing at
+a spawn point at a scheduled time, each born already running a data-authored Flow (the same
+born-with-a-Flow mechanism Train uses). Waves are a data timeline the world plays out, not a
+Flow.
+_Avoid_: spawn, round, horde, swarm
+
+**Objective**:
+A Scenario's win/lose rules, evaluated by the world (not by any Flow). For a survival Scenario:
+the player **loses** when the Command Center is destroyed, and **wins** by surviving all Waves
+(and/or a survival timer). Reads Runner Health and Wave progress; changes nothing.
+_Avoid_: goal, mission, win condition, victory, quest

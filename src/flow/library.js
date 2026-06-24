@@ -26,11 +26,11 @@ export class FlowLibrary {
     this.entries = [];
   }
 
-  create(name) {
+  create(name, targetKind = 'unit') {
     const entry = {
       id: nextId(),
       name: name || `Flow ${this.entries.length + 1}`,
-      model: new FlowModel(),
+      model: new FlowModel(targetKind),
     };
     this.entries.push(entry);
     return entry;

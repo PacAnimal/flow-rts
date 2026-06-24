@@ -15,6 +15,14 @@ export const CONDITIONS = {
     // Implicitly Crystals for now (the only Resource); a Resource selector waits for a second.
     args: [{ id: 'amount', type: 'number', label: 'Amount', min: 0, step: 10 }],
   },
+  // Combat Conditions (docs/adr/0012): an Enemy within attack range, or within an authored
+  // radius — for `Branch`-gated guard loops.
+  enemy_in_range: { id: 'enemy_in_range', label: 'Enemy in range', args: [] },
+  enemy_nearby: {
+    id: 'enemy_nearby',
+    label: 'Enemy nearby',
+    args: [{ id: 'radius', type: 'number', label: 'Tiles', min: 1, step: 1 }],
+  },
 };
 
 export function getCondition(id) {

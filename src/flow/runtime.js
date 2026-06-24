@@ -49,6 +49,33 @@ const EXECUTORS = {
     return done();
   },
 
+  // Attack-Move toward the destination Tile, engaging Enemies in the aggro radius on the way
+  // (docs/adr/0012). The world owns targeting/movement; the executor sets the intent and holds
+  // the cursor until arrival (and not mid-fight). Unset destination ⇒ no-op, advance.
+  AttackMove: (node, runner, world) => {
+    const dest = node.params?.destination;
+    if (!dest) return done();
+    world.attackMove(runner, dest);
+    return world.attackMoveArrived(runner) ? done() : RUNNING;
+  },
+
+  // Hold position and attack the nearest Enemy in range (docs/adr/0012). With no duration it is a
+  // standing guard — holds the cursor indefinitely. With a duration it fights in place for that
+  // long (timed in the per-node scratch state, like Wait) and then advances, so defence composes.
+  Hold: (node, runner, world, dt, state) => {
+    world.hold(runner);
+    const seconds = node.params?.duration;
+    if (!seconds || seconds <= 0) return RUNNING; // hold forever (default)
+    state.elapsed = (state.elapsed || 0) + dt;
+    return state.elapsed >= seconds * 1000 ? done() : RUNNING;
+  },
+
+  // Produce a Unit from a Building (docs/adr/0013). The world blocks until the Stockpile affords
+  // the cost, then waits the build time and spawns; it returns true only once the Unit is out.
+  // Funding/timing live in the per-node scratch state, so re-assignment resets cleanly.
+  Train: (node, runner, world, dt, state) =>
+    world.train(runner, node.params || {}, state, dt) ? done() : RUNNING,
+
   // Hold the cursor for `duration` seconds, accumulating elapsed time in the node's scratch
   // state. Unset or non-positive duration is a no-op (ADR-0004) — advance immediately.
   Wait: (node, runner, world, dt, state) => {

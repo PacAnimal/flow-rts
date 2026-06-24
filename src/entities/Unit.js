@@ -3,8 +3,11 @@ import { TILE, UNIT_SPEED } from '../constants.js';
 // directions in clockwise order, matching angle buckets
 const DIRS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
+import { attachHealth, drawHealthBar } from './runner.js';
+import { getUnitType, FACTION } from '../units.js';
+
 export class Unit {
-  constructor(scene, x, y, texturePrefix, displaySize, speedTilesPerSec = UNIT_SPEED) {
+  constructor(scene, x, y, texturePrefix, displaySize, faction = FACTION.PLAYER, speedTilesPerSec = UNIT_SPEED) {
     this.scene = scene;
     this.x = x;
     this.y = y;
@@ -13,10 +16,23 @@ export class Unit {
     this.speed = speedTilesPerSec * TILE;
     this._dir = 'S';
 
+    // Unit type (CONTEXT.md): the texture prefix doubles as the type key into the data table.
+    this.type = texturePrefix;
+    const def = getUnitType(texturePrefix);
+    this.carryCapacity = def ? def.carryCapacity : 0;
+
     this.sprite = scene.add.image(x, y, `${texturePrefix}_S`);
     this.sprite.setOrigin(0.5, 1);
     this._applyScale();
     this.sprite.setDepth(y);
+
+    // Runner state: Faction + Health (CONTEXT.md).
+    attachHealth(this, def ? def.maxHealth : 1, faction);
+  }
+
+  // Reposition the health bar above the sprite; called each frame as the Unit moves.
+  syncHealthBar() {
+    drawHealthBar(this, this.x, this.y - this._displaySize - 4, this._displaySize * 0.8);
   }
 
   _applyScale() {
