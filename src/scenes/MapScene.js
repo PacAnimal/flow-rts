@@ -161,6 +161,7 @@ export class MapScene extends Phaser.Scene {
       adjacentDeposit: (unit) => this._adjacentDeposit(unit),
       collect: (unit, deposit) => this._collect(unit, deposit),
       deliver: (unit) => this._deliver(unit),
+      deliverTime: (unit) => this._deliverDuration(unit),
       test: (unit, params) => this._testCondition(unit, params),
       // Combat (docs/adr/0012): the executors set a combat intent; the CombatSystem resolves it.
       attackMove: (unit, dest) => this._setCombat(unit, 'attackmove', dest),
@@ -243,6 +244,7 @@ export class MapScene extends Phaser.Scene {
   _destroyRunner(runner) {
     runner._shadow?.destroy();
     runner._healthBar?.destroy();
+    runner._progressBar?.destroy();
     runner.sprite?.destroy();
     if (runner.labelText) runner.labelText.destroy();
     runner.run = null;
@@ -986,6 +988,18 @@ void main(void){
     this._updateMaterialsPanel();
   }
 
+  // World primitive: how long delivering takes for this Worker, in ms (docs/adr/0008). 0 when
+  // there is nothing to hand off (no Cargo, or not beside the Command Center), so the Deliver
+  // Action no-ops instantly. Also turns the Worker to face the Command Center as the hand-off
+  // begins, so it stays facing it for the whole delivery (it is stationary meanwhile).
+  _deliverDuration(unit) {
+    if (!unit.cargo || !this._adjacentToCommandCenter(unit)) return 0;
+    const cc = this._commandCenter;
+    if (cc) unit.facePoint?.((cc.tx + cc.tileW / 2) * TILE, (cc.ty + cc.tileH / 2) * TILE);
+    const def = getResource(unit.cargo.type);
+    return (def?.deliverTime || 0) * 1000;
+  }
+
   // True if the Unit is within DELIVER_RANGE Tiles of the Command Center's Footprint (Chebyshev
   // distance to the footprint rectangle). Forgiving, because the blocking footprint + steering
   // leave a Unit settled a Tile or two short of actually touching the building.
@@ -1282,9 +1296,10 @@ void main(void){
     try { title = getNodeKind(node.kind).title; } catch { title = node.kind; }
     const ms = run.state?.elapsed;
     if (ms != null) {
-      const dur = node.params?.duration;
-      return dur ? `▶ ${title}  ${(ms / 1000).toFixed(1)} / ${dur.toFixed(1)}s`
-                 : `▶ ${title}  ${(ms / 1000).toFixed(1)}s`;
+      // Prefer the live scratch duration (Gather/Deliver), else the node's duration Param (Wait/Hold).
+      const total = run.state?.duration != null ? run.state.duration / 1000 : node.params?.duration;
+      return total ? `▶ ${title}  ${(ms / 1000).toFixed(1)} / ${total.toFixed(1)}s`
+                   : `▶ ${title}  ${(ms / 1000).toFixed(1)}s`;
     }
     return `▶ ${title}`;
   }
@@ -1330,6 +1345,34 @@ void main(void){
     unit.labelText.setPosition(unit.x, unit.y - TILE - 6);
     unit.syncShadow();
     unit.syncHealthBar();
+    this._drawUnitProgress(unit);
+  }
+
+  // Draw a Worker's action progress bar above its head while it runs a timed Action — green for
+  // Gather, gold for Deliver (docs/adr/0008). Read straight from the Run's live scratch state
+  // (elapsed/duration set by the executors), so it tracks the interpreter exactly; hidden the
+  // rest of the time. Kept distinct from the Deposit's cyan amount-left bar and the red Health bar.
+  _drawUnitProgress(unit) {
+    let frac = -1, color = 0x46e08a;
+    const run = unit.run;
+    if (run && run.status === 'running') {
+      const node = this._resolveFlow(run.flowId)?.getNode(run.current);
+      const st = run.state;
+      if (node && st && st.duration > 0) {
+        if (node.kind === 'Gather') { frac = st.elapsed / st.duration; color = 0x46e08a; }
+        else if (node.kind === 'Deliver') { frac = st.elapsed / st.duration; color = 0xffd23f; }
+      }
+    }
+    if (frac < 0) { unit._progressBar?.setVisible(false); return; }
+    const g = unit._progressBar || (unit._progressBar = this.add.graphics());
+    frac = Math.max(0, Math.min(1, frac));
+    const w = unit._displaySize * 0.8, h = 5;
+    const x = unit.x - w / 2;
+    const y = unit.y - unit._displaySize - 14; // above the Health-bar slot
+    g.clear();
+    g.fillStyle(0x12100a, 1).fillRect(x, y, w, h);
+    g.fillStyle(color, 1).fillRect(x, y, w * frac, h);
+    g.setDepth(2e6).setVisible(true);
   }
 
   // ── assignment persistence ─────────────────────────────────────────────────

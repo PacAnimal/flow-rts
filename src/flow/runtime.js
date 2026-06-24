@@ -31,20 +31,29 @@ const EXECUTORS = {
   // Gather from the Deposit beside the Worker (docs/adr/0008). On the first tick, ask the world
   // for an adjacent Deposit (an opaque handle + its gather time); none ⇒ no-op, advance. Then
   // hold the cursor for that gather time and, once elapsed, have the world collect into Cargo.
-  // Timing uses the per-node scratch state, so re-assigning mid-gather resets cleanly.
+  // `duration`/`elapsed` live in the per-node scratch state (so re-assigning mid-gather resets
+  // cleanly), and the world reads them to draw the Worker's progress bar.
   Gather: (node, runner, world, dt, state) => {
-    if (state.found === undefined) state.found = world.adjacentDeposit(runner); // find once
+    if (state.found === undefined) {
+      state.found = world.adjacentDeposit(runner); // find once
+      state.duration = state.found ? state.found.gatherTime * 1000 : 0;
+    }
     if (!state.found) return done(); // nothing beside it
     state.elapsed = (state.elapsed || 0) + dt;
-    if (state.elapsed < state.found.gatherTime * 1000) return RUNNING;
+    if (state.elapsed < state.duration) return RUNNING;
     world.collect(runner, state.found.handle);
     return done();
   },
 
-  // Deliver Cargo to the player's Stockpile if the Worker is beside a Command Center (docs/adr/
-  // 0008). Instant: the world transfers and empties Cargo (a no-op when not adjacent or empty),
-  // then the cursor advances.
-  Deliver: (node, runner, world) => {
+  // Deliver Cargo to the player's Stockpile beside a Command Center (docs/adr/0008). On the first
+  // tick the world reports how long the hand-off takes (0 when not adjacent or carrying nothing ⇒
+  // instant no-op). Then hold the cursor for that long and have the world transfer the Cargo.
+  // `duration`/`elapsed` mirror Gather, so the same progress bar covers both.
+  Deliver: (node, runner, world, dt, state) => {
+    if (state.duration === undefined) state.duration = world.deliverTime(runner);
+    if (!state.duration) return done(); // nothing to deliver — advance immediately
+    state.elapsed = (state.elapsed || 0) + dt;
+    if (state.elapsed < state.duration) return RUNNING;
     world.deliver(runner);
     return done();
   },
