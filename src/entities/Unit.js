@@ -59,6 +59,18 @@ export class Unit {
   updateDirection(vx, vy) {
     const spd = Math.hypot(vx, vy);
     if (spd < 5) return;
+    this._faceVector(vx, vy);
+  }
+
+  // Turn to face a world point (e.g. the Deposit being gathered or the Command Center being
+  // delivered to). Stationary while gathering/delivering, so this sticks until the Unit moves.
+  facePoint(px, py) {
+    const vx = px - this.x, vy = py - this.y;
+    if (Math.hypot(vx, vy) < 1e-3) return; // already on top of it — keep current facing
+    this._faceVector(vx, vy);
+  }
+
+  _faceVector(vx, vy) {
     const angle = Math.atan2(vy, vx); // -π to π, 0=east
     // convert to 0=north clockwise: add 90° offset then normalise
     const deg = ((angle * 180 / Math.PI) + 90 + 360) % 360;

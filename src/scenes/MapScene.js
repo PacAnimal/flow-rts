@@ -866,11 +866,35 @@ void main(void){
 
   _addDeposit(type, tx, ty, sprite) {
     const def = getResource(type);
-    const deposit = { type, tx, ty, amount: def ? def.depositAmount : 0, sprite };
+    const deposit = { type, tx, ty, amount: def ? def.depositAmount : 0, max: def ? def.depositAmount : 0, sprite };
+    // Amount-left bar (always visible, distinct from the Runner Health bar). Deposits never move,
+    // so it's drawn once here and only redrawn in _collect when the amount changes — never per-frame.
+    deposit._amountBar = this.add.graphics();
     this._deposits.push(deposit);
     this._depositByTile.set(`${tx},${ty}`, deposit);
     this._occupy(tx, ty, 1, 1, 'deposit', true); // Deposits block their Tile (docs/adr/0009)
+    this._drawDepositBar(deposit);
     return deposit;
+  }
+
+  // Draw a Deposit's amount-left bar: a fixed-width track anchored above its Tile (not the
+  // variably-scaled sprite), so a dense cluster shows an even, readable row. Cyan fill reads as
+  // "resource remaining" — kept separate from the red Runner Health bar (CONTEXT.md, ADR-0008).
+  // Hidden while full to keep dense fields uncluttered; appears once gathering begins.
+  _drawDepositBar(deposit) {
+    const g = deposit._amountBar;
+    if (!g) return;
+    const frac = deposit.max > 0 ? deposit.amount / deposit.max : 0;
+    if (frac >= 1) { g.setVisible(false); return; }
+    const w = TILE * 0.9;
+    const h = 4;
+    const cx = deposit.tx * TILE + TILE * 0.5;
+    const x = cx - w / 2;
+    const y = deposit.ty * TILE - 12; // a little above the Tile's top edge
+    g.clear();
+    g.fillStyle(0x06222b, 1).fillRect(x, y, w, h);
+    g.fillStyle(0x35d6e6, 1).fillRect(x, y, w * frac, h);
+    g.setDepth(2e6).setVisible(true);
   }
 
   // The Tile a Unit currently stands on (feet at the Tile's bottom-centre — matches movement.js).
@@ -896,6 +920,9 @@ void main(void){
     // Full for this Resource ⇒ nothing to gather: the Worker no-ops rather than standing idle.
     if (this._cargoRoom(unit, best.type) <= 0) return null;
     const def = getResource(best.type);
+    // Turn to face the Deposit as the gather begins (this is the gather's first tick); the Worker
+    // is stationary for the gather time, so the facing holds until it moves off.
+    unit.facePoint?.(best.tx * TILE + TILE * 0.5, best.ty * TILE + TILE * 0.5);
     return { handle: best, gatherTime: def ? def.gatherTime : 0 };
   }
 
@@ -916,11 +943,13 @@ void main(void){
     if (unit.cargo && unit.cargo.type === deposit.type) unit.cargo.amount += got;
     else unit.cargo = { type: deposit.type, amount: got };
     if (deposit.amount <= 0) this._removeDeposit(deposit);
+    else this._drawDepositBar(deposit); // redraw the amount-left bar on change
     this._refreshUnitLabel(unit);
   }
 
   _removeDeposit(deposit) {
     deposit.sprite.destroy();
+    deposit._amountBar?.destroy();
     this._depositByTile.delete(`${deposit.tx},${deposit.ty}`);
     this._occupied.delete(`${deposit.tx},${deposit.ty}`); // free the Tile (docs/adr/0009)
     this._deposits = this._deposits.filter((d) => d !== deposit);
@@ -930,6 +959,9 @@ void main(void){
   // into the player's Stockpile and empty the Cargo (docs/adr/0008). No-op otherwise.
   _deliver(unit) {
     if (!unit.cargo || !this._adjacentToCommandCenter(unit)) return;
+    // Turn to face the Command Center as the Worker hands off its Cargo.
+    const cc = this._commandCenter;
+    if (cc) unit.facePoint?.((cc.tx + cc.tileW / 2) * TILE, (cc.ty + cc.tileH / 2) * TILE);
     const { type, amount } = unit.cargo;
     this._stockpile[type] = (this._stockpile[type] || 0) + amount;
     unit.cargo = null;
