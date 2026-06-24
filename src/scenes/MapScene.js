@@ -29,7 +29,7 @@ const MAP_W = 120;
 const MAP_H = 90;
 
 // Unit type id → class, for spawning produced/Enemy Units by type (docs/adr/0013, 0014).
-const UNIT_CLASS = { worker: Worker, marine: Marine };
+const UNIT_CLASS = { worker: Worker, marine: Marine, zapper: Zapper, reaper: Reaper, tank: Tank, mech: Mech };
 
 // Label styles for units: name in light grey, running flow in electric blue.
 const LABEL_NAME_STYLE = {
