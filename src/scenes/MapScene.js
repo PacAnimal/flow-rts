@@ -31,11 +31,17 @@ const MAP_H = 90;
 // Unit type id → class, for spawning produced/Enemy Units by type (docs/adr/0013, 0014).
 const UNIT_CLASS = { worker: Worker, marine: Marine, zapper: Zapper, reaper: Reaper, tank: Tank, mech: Mech };
 
-// Shared label style for the text above every Unit.
-const LABEL_STYLE = {
-  fontFamily: 'system-ui, sans-serif', fontSize: '13px', color: '#ffffff',
+// Label styles for units: name in light grey, running flow in electric blue.
+const LABEL_NAME_STYLE = {
+  fontFamily: 'system-ui, sans-serif', fontSize: '13px', color: '#b8bec8',
   backgroundColor: 'rgba(0,0,0,0.55)', padding: { x: 5, y: 2 },
 };
+const LABEL_FLOW_STYLE = {
+  fontFamily: 'system-ui, sans-serif', fontSize: '13px', color: '#7df9ff',
+  backgroundColor: 'rgba(0,0,0,0.55)', padding: { x: 5, y: 2 },
+};
+// Building labels reuse the name style.
+const LABEL_STYLE = LABEL_NAME_STYLE;
 
 // Tiles kept clear of crystals/decorations around the command center, beyond its footprint,
 // so the start area stays open (docs/adr/0009).
@@ -111,6 +117,7 @@ export class MapScene extends Phaser.Scene {
     this._enemyFlows = new Map(); // flowId → FlowModel for spawned Enemies
     this._over = false;           // set once the Objective resolves (win/lose)
     this._enemySeq = 0;
+    this._nextUnitId = 1; // global counter — every unit and building gets a unique number
     this._assignments = this._loadAssignments(); // { [runner.label]: flowId }, shared by buildings + units
 
     const { tiles, isHill, isRamp } = this._generateTerrain();
@@ -140,7 +147,11 @@ export class MapScene extends Phaser.Scene {
     // system, and applies Damage. Engine-agnostic like movement — it reaches the game by callback.
     this._combat = new CombatSystem({
       targetsFor: (unit) => this._targetsFor(unit),
-      onAttack: (attacker, target) => this._applyDamage(target, getUnitType(attacker.type)?.damage || 0),
+      onAttack: (attacker, target) => {
+        const dmg = getUnitType(attacker.type)?.damage || 0;
+        this._log(`${attacker.label} attacks ${target.label}`);
+        this._applyDamage(target, dmg);
+      },
       movement: this._movement,
     });
 
@@ -222,7 +233,14 @@ export class MapScene extends Phaser.Scene {
     if (!run || run.status !== 'running') return;
     const model = this._resolveFlow(run.flowId);
     if (!model) { run.status = 'halted'; return; }
+    const prevNode = run.current;
     tickRun(run, runner, model, this._world, delta);
+    if (run.current !== prevNode && run.current) {
+      const node = model.getNode(run.current);
+      if (node && node.kind !== 'OnStart') this._log(`${runner.label} ▶ ${this._nodeDesc(node)}`);
+    }
+    if (run.status === 'idle') this._log(`${runner.label} flow complete`);
+    if (run.status === 'halted') this._log(`${runner.label} flow halted (node deleted)`);
   }
 
   _resolveFlow(flowId) {
@@ -237,8 +255,12 @@ export class MapScene extends Phaser.Scene {
   _applyDamage(target, amount) {
     if (!target || target.health <= 0) return;
     const died = applyDamage(target, amount);
+    this._log(`${target.label} takes ${amount} damage — Health: ${target.health}/${target.maxHealth}`);
     target.syncHealthBar();
-    if (died) this._destroyRunner(target);
+    if (died) {
+      this._log(`${target.label} is destroyed`);
+      this._destroyRunner(target);
+    }
   }
 
   _destroyRunner(runner) {
@@ -246,7 +268,8 @@ export class MapScene extends Phaser.Scene {
     runner._healthBar?.destroy();
     runner._progressBar?.destroy();
     runner.sprite?.destroy();
-    if (runner.labelText) runner.labelText.destroy();
+    if (runner.labelNameText) runner.labelNameText.destroy();
+    if (runner.labelFlowText) runner.labelFlowText.destroy();
     runner.run = null;
 
     // If we were inspecting this Runner, close the panel — there's nothing left to watch.
@@ -362,11 +385,12 @@ export class MapScene extends Phaser.Scene {
     const Cls = UNIT_CLASS[typeId];
     if (!Cls) return null;
     const unit = new Cls(this, tx * TILE + TILE * 0.5, ty * TILE + TILE, faction);
-    unit.label = getUnitType(typeId)?.label || typeId;
+    unit.label = `${getUnitType(typeId)?.label || typeId} ${this._nextUnitId++}`;
     unit.sprite.setInteractive({ useHandCursor: true });
     unit.sprite.setData('unit', unit);
-    unit.labelText = this.add.text(unit.x, unit.y - TILE - 6, '', LABEL_STYLE)
-      .setOrigin(0.5, 1).setDepth(1e6);
+    const hbTopY0 = unit.y - unit._displaySize - 6;
+    unit.labelNameText = this.add.text(unit.x, hbTopY0 - 2, '', LABEL_NAME_STYLE).setOrigin(0.5, 1).setDepth(1e6);
+    unit.labelFlowText = this.add.text(unit.x, hbTopY0 - 2, '', LABEL_FLOW_STYLE).setOrigin(0.5, 1).setDepth(1e6).setVisible(false);
     this.units.push(unit);
     return unit;
   }
@@ -402,7 +426,7 @@ export class MapScene extends Phaser.Scene {
     this._enemyFlows.set(id, model);
     unit.assignedFlowId = id;
     unit.run = startRun(id, model);
-    unit.labelText.setColor?.('#ff6b6b');
+    unit.labelNameText.setColor('#ff6b6b');
     this._refreshUnitLabel(unit);
   }
 
@@ -1076,13 +1100,15 @@ void main(void){
   // Make a Building a Runner (CONTEXT.md): selectable, with a restored Assignment and a Run, plus
   // a label above it showing its assigned Flow. Buildings are ticked alongside Units.
   _registerBuilding(b, label) {
-    b.label = label;
+    b.label = `${label} ${this._nextUnitId++}`;
     const savedId = this._assignments[label];
     b.assignedFlowId = savedId && flowLibrary.get(savedId) ? savedId : null;
     b.sprite.setInteractive({ useHandCursor: true });
     b.sprite.setData('building', b);
-    b.labelText = this.add.text(b._cx, b._top - 22, '', LABEL_STYLE)
-      .setOrigin(0.5, 1).setDepth(1e6);
+    // anchor labels to the health bar (sprite.y - displayHeight - 8), not to the tile top
+    const hbTopY = b.sprite.y - b.sprite.displayHeight - 8;
+    b.labelNameText = this.add.text(b._cx, hbTopY - 2, b.label, LABEL_NAME_STYLE).setOrigin(0.5, 1).setDepth(1e6);
+    b.labelFlowText = this.add.text(b._cx, hbTopY - 2 - b.labelNameText.height - 2, '', LABEL_FLOW_STYLE).setOrigin(0.5, 1).setDepth(1e6).setVisible(false);
     this.buildings.push(b);
     this._refreshBuildingLabel(b);
     b.syncHealthBar();
@@ -1091,7 +1117,8 @@ void main(void){
 
   _refreshBuildingLabel(b) {
     const entry = b.assignedFlowId ? flowLibrary.get(b.assignedFlowId) : null;
-    b.labelText.setText(entry ? `${b.label} · ${entry.name}` : b.label);
+    b.labelNameText?.setText(b.label);
+    b.labelFlowText?.setText(entry ? entry.name : '').setVisible(!!entry);
   }
 
   // ── units ─────────────────────────────────────────────────────────────────
@@ -1103,31 +1130,31 @@ void main(void){
     const fac = this._factory;
     // workers below CC; marines right of barracks; mechs left of factory
     const unitSpawns = [
-      { tx: cc.tx - 1,                    ty: cc.ty + cc.tileH + 3,        label: 'Worker 1', Cls: Worker, dir: 'S'  },
-      { tx: cc.tx + (cc.tileW / 2 | 0),   ty: cc.ty + cc.tileH + 3,        label: 'Worker 2', Cls: Worker, dir: 'SE' },
-      { tx: cc.tx + cc.tileW + 1,         ty: cc.ty + cc.tileH + 3,        label: 'Worker 3', Cls: Worker, dir: 'NW' },
-      { tx: bar.tx + bar.tileW + 2,       ty: bar.ty,                       label: 'Marine 1', Cls: Marine, dir: 'W'  },
-      { tx: bar.tx + bar.tileW + 2,       ty: bar.ty + (bar.tileH / 2 | 0), label: 'Marine 2', Cls: Marine, dir: 'SW' },
-      { tx: bar.tx + bar.tileW + 2,       ty: bar.ty + bar.tileH,           label: 'Marine 3', Cls: Marine, dir: 'NW' },
-      { tx: fac.tx,                        ty: fac.ty + fac.tileH + 2,       label: 'Mech 1',   Cls: Mech,   dir: 'N'  },
-      { tx: fac.tx + fac.tileW,           ty: fac.ty + fac.tileH + 2,       label: 'Mech 2',   Cls: Mech,   dir: 'NE' },
-      { tx: fac.tx + (fac.tileW / 2 | 0), ty: fac.ty + fac.tileH + 4,       label: 'Tank 1',   Cls: Tank,   dir: 'N'  },
-      { tx: bar.tx - 3,                   ty: bar.ty,                        label: 'Zapper 1',       Cls: Zapper,      dir: 'E'  },
-      { tx: bar.tx - 3,                   ty: bar.ty + bar.tileH,            label: 'Zapper 2',       Cls: Zapper,      dir: 'SE' },
-      { tx: bar.tx + bar.tileW + 2,       ty: bar.ty - 3,                    label: 'Reaper 1',       Cls: Reaper,      dir: 'S'  },
-      { tx: bar.tx + bar.tileW + 4,       ty: bar.ty - 3,                    label: 'Reaper 2',       Cls: Reaper,      dir: 'SW' },
-      { tx: cc.tx - 2,                    ty: cc.ty - 4,                     label: 'Chojin 1',       Cls: Chojin,      dir: 'SE' },
-      { tx: cc.tx + (cc.tileW / 2 | 0),   ty: cc.ty - 5,                     label: 'Heavy Chojin 1', Cls: HeavyChojin, dir: 'S'  },
-      { tx: cc.tx + cc.tileW + 2,         ty: cc.ty - 4,                     label: 'Chojin 2',       Cls: Chojin,      dir: 'SW' },
-      { tx: cc.tx - 4,                    ty: cc.ty - 3,                     label: 'Heavy Chojin 2', Cls: HeavyChojin, dir: 'E'  },
-      { tx: cc.tx + cc.tileW + 4,         ty: cc.ty - 3,                     label: 'Chojin 3',       Cls: Chojin,      dir: 'W'  },
+      { tx: cc.tx - 1,                    ty: cc.ty + cc.tileH + 3,        label: 'Worker',       Cls: Worker,      dir: 'S'  },
+      { tx: cc.tx + (cc.tileW / 2 | 0),   ty: cc.ty + cc.tileH + 3,        label: 'Worker',       Cls: Worker,      dir: 'SE' },
+      { tx: cc.tx + cc.tileW + 1,         ty: cc.ty + cc.tileH + 3,        label: 'Worker',       Cls: Worker,      dir: 'NW' },
+      { tx: bar.tx + bar.tileW + 2,       ty: bar.ty,                       label: 'Marine',       Cls: Marine,      dir: 'W'  },
+      { tx: bar.tx + bar.tileW + 2,       ty: bar.ty + (bar.tileH / 2 | 0), label: 'Marine',       Cls: Marine,      dir: 'SW' },
+      { tx: bar.tx + bar.tileW + 2,       ty: bar.ty + bar.tileH,           label: 'Marine',       Cls: Marine,      dir: 'NW' },
+      { tx: fac.tx,                        ty: fac.ty + fac.tileH + 2,       label: 'Mech',         Cls: Mech,        dir: 'N'  },
+      { tx: fac.tx + fac.tileW,           ty: fac.ty + fac.tileH + 2,       label: 'Mech',         Cls: Mech,        dir: 'NE' },
+      { tx: fac.tx + (fac.tileW / 2 | 0), ty: fac.ty + fac.tileH + 4,       label: 'Tank',         Cls: Tank,        dir: 'N'  },
+      { tx: bar.tx - 3,                   ty: bar.ty,                        label: 'Zapper',       Cls: Zapper,      dir: 'E'  },
+      { tx: bar.tx - 3,                   ty: bar.ty + bar.tileH,            label: 'Zapper',       Cls: Zapper,      dir: 'SE' },
+      { tx: bar.tx + bar.tileW + 2,       ty: bar.ty - 3,                    label: 'Reaper',       Cls: Reaper,      dir: 'S'  },
+      { tx: bar.tx + bar.tileW + 4,       ty: bar.ty - 3,                    label: 'Reaper',       Cls: Reaper,      dir: 'SW' },
+      { tx: cc.tx - 2,                    ty: cc.ty - 4,                     label: 'Chojin',       Cls: Chojin,      dir: 'SE' },
+      { tx: cc.tx + (cc.tileW / 2 | 0),   ty: cc.ty - 5,                     label: 'Heavy Chojin', Cls: HeavyChojin, dir: 'S'  },
+      { tx: cc.tx + cc.tileW + 2,         ty: cc.ty - 4,                     label: 'Chojin',       Cls: Chojin,      dir: 'SW' },
+      { tx: cc.tx - 4,                    ty: cc.ty - 3,                     label: 'Heavy Chojin', Cls: HeavyChojin, dir: 'E'  },
+      { tx: cc.tx + cc.tileW + 4,         ty: cc.ty - 3,                     label: 'Chojin',       Cls: Chojin,      dir: 'W'  },
     ];
     // 30 biters in a staggered grid across the whole map, placed away from the base
     const DIRS8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
     const biterSpawns = Array.from({ length: 30 }, (_, i) => ({
       tx: 8 + (i % 6) * 18 + (Math.floor(i / 6) % 2) * 7,
       ty: 6 + Math.floor(i / 6) * 16,
-      label: `Biter ${i + 1}`,
+      label: 'Biter',
       dir: DIRS8[i % 8],
     }));
     const allSpawns = [
@@ -1165,15 +1192,16 @@ void main(void){
   // Make a Unit selectable and give it a Flow-name label above its sprite. (Carry capacity now
   // comes from the unit type in the data table, set in the Unit constructor.)
   _registerUnit(unit, label) {
-    unit.label = label;
+    unit.label = `${label} ${this._nextUnitId++}`;
     // Restore a persisted assignment, but only if that Flow still exists in the Library.
     const savedId = this._assignments[label];
     unit.assignedFlowId = savedId && flowLibrary.get(savedId) ? savedId : null;
     unit.sprite.setInteractive({ useHandCursor: true });
     unit.sprite.setData('unit', unit);
 
-    unit.labelText = this.add.text(unit.x, unit.y - TILE - 6, '', LABEL_STYLE)
-      .setOrigin(0.5, 1).setDepth(1e6);
+    const hbTopY0 = unit.y - unit._displaySize - 6;
+    unit.labelNameText = this.add.text(unit.x, hbTopY0 - 2, '', LABEL_NAME_STYLE).setOrigin(0.5, 1).setDepth(1e6);
+    unit.labelFlowText = this.add.text(unit.x, hbTopY0 - 2, '', LABEL_FLOW_STYLE).setOrigin(0.5, 1).setDepth(1e6).setVisible(false);
 
     this.units.push(unit);
     this._refreshUnitLabel(unit);
@@ -1186,13 +1214,13 @@ void main(void){
   // gathering is observable until there's a real animation/HUD (docs/adr/0008).
   _refreshUnitLabel(unit) {
     const entry = unit.assignedFlowId ? flowLibrary.get(unit.assignedFlowId) : null;
-    const parts = [];
-    if (entry) parts.push(entry.name);
+    const nameParts = [unit.label];
     if (unit.cargo) {
       const def = getResource(unit.cargo.type);
-      parts.push(`${def ? def.glyph : ''}${unit.cargo.amount}`);
+      nameParts.push(`${def ? def.glyph : ''}${unit.cargo.amount}`);
     }
-    unit.labelText.setText(parts.join('  ·  '));
+    unit.labelNameText?.setText(nameParts.join('  ·  '));
+    unit.labelFlowText?.setText(entry ? entry.name : '').setVisible(!!entry);
   }
 
   // (Re)start a Runner's Run from its assigned Flow's OnStart — Units and Buildings alike. Called
@@ -1202,6 +1230,26 @@ void main(void){
   _startRun(runner) {
     const entry = this._running && runner.assignedFlowId ? flowLibrary.get(runner.assignedFlowId) : null;
     runner.run = entry ? startRun(entry.id, entry.model) : null;
+    if (runner.run) this._log(`${runner.label} starts flow "${entry.name}"`);
+  }
+
+  // Timestamped console log for in-game events (combat, flow transitions, damage).
+  _log(msg) {
+    const s = (this.time.now / 1000).toFixed(1);
+    console.log(`[${s}s] ${msg}`);
+  }
+
+  // Human-readable description of a node for log output, including key params.
+  _nodeDesc(node) {
+    const p = node.params;
+    if (node.kind === 'Move' || node.kind === 'AttackMove') {
+      const d = p?.destination;
+      return d ? `${node.kind} → (${d.x}, ${d.y})` : node.kind;
+    }
+    if (node.kind === 'Wait') return p?.duration ? `Wait ${p.duration}s` : 'Wait';
+    if (node.kind === 'Hold') return p?.duration ? `Hold ${p.duration}s` : 'Hold';
+    if (node.kind === 'Train') return p?.type ? `Train ${p.type}` : 'Train';
+    return node.kind;
   }
 
   // START/PAUSE (docs/adr/0005). PAUSE only flips the flag — update() then freezes, so every
@@ -1344,7 +1392,9 @@ void main(void){
     if (unit._vel) unit.updateDirection(unit._vel.x, unit._vel.y);
     unit.sprite.setPosition(unit.x, unit.y);
     unit.sprite.setDepth(unit.y);
-    unit.labelText.setPosition(unit.x, unit.y - TILE - 6);
+    const hbTopY = unit.y - unit._displaySize - 6;
+    unit.labelNameText.setPosition(unit.x, hbTopY - 2);
+    unit.labelFlowText.setPosition(unit.x, hbTopY - 2 - unit.labelNameText.height - 2);
     unit.syncShadow();
     unit.syncHealthBar();
     this._drawUnitProgress(unit);
