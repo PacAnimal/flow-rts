@@ -1,0 +1,124 @@
+// Attack visual effects — a transient render-layer helper, not game logic. It lives on the
+// Phaser side (like the entity sprites) and is driven by MapScene's onAttack callback: the
+// CombatSystem decides *that* an attack lands (docs/adr/0012); this only shows it. A short
+// reach reads as a melee strike (a three-stripe claw slash at the target), a longer reach as
+// a ranged bolt (a laser that travels from attacker to target and flashes on impact). Each
+// effect is a self-destroying tween over a throwaway Graphics object, so there is no per-frame
+// bookkeeping for MapScene to do — fire and forget.
+
+import Phaser from 'phaser';
+import { TILE } from './constants.js';
+import { FACTION } from './units.js';
+
+// Above unit sprites (depth = y, so < map height in px) but below labels/bars (1e6+).
+const EFFECT_DEPTH = 9e5;
+
+// Tint the effect by the attacker's side so a glance reads who is shooting whom.
+const FACTION_COLOR = {
+  [FACTION.PLAYER]: 0x7df9ff,   // electric blue, matching the flow-label accent
+  [FACTION.ENEMY]: 0xff5a4d,    // hostile red
+  [FACTION.CRITTER]: 0xffc24d,  // amber
+};
+
+export class AttackEffects {
+  constructor(scene) {
+    this.scene = scene;
+  }
+
+  // Aim at a Runner's body centre rather than its feet ({x,y} is the feet position).
+  _bodyY(entity) {
+    return entity.y - (entity._displaySize || TILE) * 0.45;
+  }
+
+  // Entry point: pick the effect from the attacker's reach (in Tiles). Melee Units sit at
+  // range 1.5; anything reaching ~2+ Tiles reads as ranged.
+  show(attacker, target, def) {
+    const color = FACTION_COLOR[attacker.faction] ?? 0xffffff;
+    const tx = target.x, ty = this._bodyY(target);
+    if ((def?.range || 0) >= 2) {
+      this._laser(attacker.x, this._bodyY(attacker), tx, ty, color);
+    } else {
+      this._slash(tx, ty, color);
+    }
+  }
+
+  // A bright bolt that travels source→target, trailing a soft glow, then flashes on arrival.
+  // Travel time scales with distance (clamped) so near and far shots both read clearly.
+  _laser(x1, y1, x2, y2, color) {
+    const scene = this.scene;
+    const g = scene.add.graphics().setDepth(EFFECT_DEPTH);
+    const dx = x2 - x1, dy = y2 - y1;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len;
+    const boltLen = Math.min(30, len * 0.5);
+    const state = { p: 0 };
+    scene.tweens.add({
+      targets: state,
+      p: 1,
+      duration: Phaser.Math.Clamp(len / 1.6, 70, 200),
+      ease: 'Linear',
+      onUpdate: () => {
+        const head = state.p * len;
+        const tail = Math.max(0, head - boltLen);
+        const hx = x1 + ux * head, hy = y1 + uy * head;
+        const tx = x1 + ux * tail, ty = y1 + uy * tail;
+        g.clear();
+        g.lineStyle(7, color, 0.22); g.beginPath(); g.moveTo(tx, ty); g.lineTo(hx, hy); g.strokePath();
+        g.lineStyle(2.5, 0xffffff, 0.95); g.beginPath(); g.moveTo(tx, ty); g.lineTo(hx, hy); g.strokePath();
+      },
+      onComplete: () => { g.destroy(); this._impact(x2, y2, color); },
+    });
+  }
+
+  // A small expanding ring where the bolt lands.
+  _impact(x, y, color) {
+    const g = this.scene.add.graphics().setDepth(EFFECT_DEPTH);
+    const s = { r: 2, a: 0.9 };
+    this.scene.tweens.add({
+      targets: s,
+      r: 13, a: 0,
+      duration: 170,
+      ease: 'Quad.Out',
+      onUpdate: () => {
+        g.clear();
+        g.fillStyle(color, s.a * 0.5); g.fillCircle(x, y, s.r);
+        g.lineStyle(2, 0xffffff, s.a); g.strokeCircle(x, y, s.r);
+      },
+      onComplete: () => g.destroy(),
+    });
+  }
+
+  // Three parallel claw stripes raking diagonally across the target, then fading — drawn with a
+  // soft coloured underglow and a bright white core, like the laser, so the two share a look.
+  _slash(cx, cy, color) {
+    const scene = this.scene;
+    const g = scene.add.graphics().setDepth(EFFECT_DEPTH);
+    const ang = -Math.PI / 4 + 0.25;          // raking down-left → up-right
+    const dx = Math.cos(ang), dy = Math.sin(ang);
+    const px = -dy, py = dx;                   // perpendicular, to space the three stripes
+    const base = 46;
+    const offsets = [-12, 0, 12];
+    const lens = [0.78, 1, 0.84];              // uneven lengths read as claws, not a comb
+    const s = { p: 0 };
+    scene.tweens.add({
+      targets: s,
+      p: 1,
+      duration: 240,
+      ease: 'Cubic.Out',
+      onUpdate: () => {
+        const reveal = Math.min(1, s.p * 1.8);                       // rake outward, then hold
+        const alpha = s.p < 0.45 ? 1 : Math.max(0, 1 - (s.p - 0.45) / 0.55);
+        g.clear();
+        for (let i = 0; i < 3; i++) {
+          const L = base * lens[i];
+          const ox = px * offsets[i], oy = py * offsets[i];
+          const sx = cx - dx * L / 2 + ox, sy = cy - dy * L / 2 + oy;
+          const ex = sx + dx * L * reveal, ey = sy + dy * L * reveal;
+          g.lineStyle(5, color, alpha * 0.3); g.beginPath(); g.moveTo(sx, sy); g.lineTo(ex, ey); g.strokePath();
+          g.lineStyle(2, 0xffffff, alpha); g.beginPath(); g.moveTo(sx, sy); g.lineTo(ex, ey); g.strokePath();
+        }
+      },
+      onComplete: () => g.destroy(),
+    });
+  }
+}
