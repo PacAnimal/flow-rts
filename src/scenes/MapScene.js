@@ -1194,7 +1194,8 @@ void main(void){
   // a label above it showing its assigned Flow. Buildings are ticked alongside Units.
   _registerBuilding(b, label) {
     b.label = `${label} ${this._nextUnitId++}`;
-    const savedId = this._assignments[label];
+    // Keyed by the full label (e.g. "Barracks 2"), matching _saveAssignments (see _registerUnit).
+    const savedId = this._assignments[b.label];
     b.assignedFlowId = savedId && flowLibrary.get(savedId) ? savedId : null;
     b.sprite.setInteractive({ useHandCursor: true });
     b.sprite.setData('building', b);
@@ -1286,8 +1287,10 @@ void main(void){
   // comes from the unit type in the data table, set in the Unit constructor.)
   _registerUnit(unit, label) {
     unit.label = `${label} ${this._nextUnitId++}`;
-    // Restore a persisted assignment, but only if that Flow still exists in the Library.
-    const savedId = this._assignments[label];
+    // Restore a persisted assignment, but only if that Flow still exists in the Library. Keyed by
+    // the full label (e.g. "Marine 5") — the same key _saveAssignments writes; spawn order is
+    // deterministic, so a given label maps to the same Unit across refreshes.
+    const savedId = this._assignments[unit.label];
     unit.assignedFlowId = savedId && flowLibrary.get(savedId) ? savedId : null;
     unit.sprite.setInteractive({ useHandCursor: true });
     unit.sprite.setData('unit', unit);
