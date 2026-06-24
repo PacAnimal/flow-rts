@@ -12,6 +12,9 @@ const RADIUS = 0.30 * TILE;          // Unit collision radius
 const SEP_RANGE = 0.70 * TILE;       // start pushing apart within this distance
 const WP_REACH = 0.35 * TILE;        // advance to next waypoint once this close
 const ARRIVE = 0.22 * TILE;          // close enough to the final destination (lone Unit)
+const ARRIVE_LOOSE = 0.85 * TILE;    // a forgiving arrival: "near enough" so Units sharing one
+                                     // destination (a rally point, the Command Center) settle on
+                                     // nearby Tiles instead of shoving over one (docs/adr/0017)
 const SLOW_RADIUS = 1.4 * TILE;      // begin easing speed near the destination
 const STUCK_MS = 700;                // no progress this long near the goal ⇒ settle (arrived)
 const STUCK_SPEED = SPEED * 0.12;    // below this counts as "not making progress"
@@ -36,8 +39,11 @@ export class MovementSystem {
 
   // Set (or refresh) where this Unit is heading. A new destination Tile recomputes the Path;
   // the same destination is a no-op. No route ⇒ arrived (give up). Called from Move's executor.
-  setGoal(unit, tx, ty) {
+  // `loose` is how close counts as arrived (docs/adr/0017): false ⇒ snug (ARRIVE), e.g. the
+  // gather approach; true ⇒ ARRIVE_LOOSE, a forgiving rally/delivery Move that many Units share.
+  setGoal(unit, tx, ty, loose = false) {
     const mv = this._mv(unit);
+    mv.arriveR = loose ? ARRIVE_LOOSE : ARRIVE;
     if (mv.goalTx === tx && mv.goalTy === ty) return;
     mv.goalTx = tx; mv.goalTy = ty; mv.stuck = 0;
     const start = tileAt(unit.x, unit.y);
@@ -87,7 +93,7 @@ export class MovementSystem {
         // must not falsely "arrive" mid-fight.
         const engaged = unit.combat && unit.combat.engaged;
         const stuckThresh = (unit.speed ?? SPEED) * 0.12 * s;
-        if (dist(unit.x, unit.y, goal.x, goal.y) <= ARRIVE) mv.arrived = true;
+        if (dist(unit.x, unit.y, goal.x, goal.y) <= (mv.arriveR ?? ARRIVE)) mv.arrived = true;
         else if (moved < stuckThresh && !engaged) { if ((mv.stuck += dt) > STUCK_MS) mv.arrived = true; }
         else if (!engaged) mv.stuck = 0;
       }

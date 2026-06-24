@@ -44,9 +44,12 @@ export const NODE_KINDS = {
     category: 'action',
     runner: 'unit',
     title: 'Gather Resources',
-    // Beside a Deposit, the Worker stands for the Resource's gather time, then takes its yield
-    // into Cargo (docs/adr/0008). No Parameters — it gathers from whatever adjacent Deposit it
-    // finds; if none is adjacent it is a no-op. Chainable like any Action.
+    // Claims the nearest unclaimed Deposit near where the Worker was rallied, walks the last Tiles
+    // to a free Tile beside it, stands for the Resource's gather time, and takes its yield into
+    // Cargo (docs/adr/0008, 0017). No Parameters — it adapts to whatever Deposit is in reach. One
+    // Worker per Deposit, so several Workers on one Flow spread across a cluster. If every Deposit
+    // in reach is already claimed it WAITS in place (holds the cursor) until one frees; with no
+    // Deposit ever in reach (field empty, or rallied too far) it waits indefinitely. Chainable.
     ports: [
       { id: 'in', dir: 'in', type: 'exec', label: '' },
       { id: 'out', dir: 'out', type: 'exec', label: '' },

@@ -22,26 +22,36 @@ const EXECUTORS = {
 
   // Glide toward the destination Tile; hold the cursor until arrival. An unset destination
   // is a valid authoring state (ADR-0004) — treat it as a no-op and advance immediately.
-  Move: (node, runner, world, dt) => {
+  Move: (node, runner, world) => {
     const dest = node.params?.destination;
     if (!dest) return done();
-    return world.moveToward(runner, dest, dt) ? done() : RUNNING;
+    // Loose arrival: many Units share one rally/delivery Tile, so "near enough" beats shoving
+    // over the exact Tile (docs/adr/0017).
+    return world.moveToward(runner, dest, true) ? done() : RUNNING;
   },
 
-  // Gather from the Deposit beside the Worker (docs/adr/0008). On the first tick, ask the world
-  // for an adjacent Deposit (an opaque handle + its gather time); none ⇒ no-op, advance. Then
-  // hold the cursor for that gather time and, once elapsed, have the world collect into Cargo.
-  // `duration`/`elapsed` live in the per-node scratch state (so re-assigning mid-gather resets
-  // cleanly), and the world reads them to draw the Worker's progress bar.
+  // Gather from a Deposit (docs/adr/0008, 0017). A gathering Worker CLAIMS the nearest unclaimed
+  // Deposit within reach of where it was rallied, so several Workers running one shared Flow spread
+  // across the cluster instead of crowding one Deposit. First tick: claim one (an opaque handle + a
+  // free Tile beside it + its gather time); null ⇒ all in reach are claimed, so hold the cursor and
+  // wait in place until one frees. Then walk the last Tiles to that standing Tile (snug arrival, no
+  // contention — distinct Workers head for distinct Tiles), stand for the Resource's gather time,
+  // and collect — which frees the Claim once Cargo fills (docs/adr/0017). `claim`/`elapsed` live in
+  // the per-node scratch state, so re-assigning mid-gather resets cleanly (the world frees the
+  // Claim). With no Deposit ever in reach (field exhausted, or rallied too far) the Worker waits.
   Gather: (node, runner, world, dt, state) => {
-    if (state.found === undefined) {
-      state.found = world.adjacentDeposit(runner); // find once
-      state.duration = state.found ? state.found.gatherTime * 1000 : 0;
+    if (!state.claim) {
+      state.claim = world.claimDeposit(runner);
+      if (!state.claim) return RUNNING; // nothing free in reach — wait in place
     }
-    if (!state.found) return done(); // nothing beside it
+    if (!state.arrived) {
+      if (!world.moveToward(runner, state.claim.dest)) return RUNNING; // approach the Deposit
+      state.arrived = true;
+      state.duration = state.claim.gatherTime * 1000; // start the harvest timer + progress bar
+    }
     state.elapsed = (state.elapsed || 0) + dt;
     if (state.elapsed < state.duration) return RUNNING;
-    world.collect(runner, state.found.handle);
+    world.collect(runner, state.claim.handle);
     return done();
   },
 

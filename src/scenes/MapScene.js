@@ -52,6 +52,11 @@ const START_CLEARANCE = 3;
 // large blocking Building makes Units settle a Tile or two short of touching it (docs/adr/0008).
 const DELIVER_RANGE = 2;
 
+// How far (in Tiles) from where a Worker was rallied Gather looks for a Deposit to claim. Covers a
+// typical 3–6 Deposit cluster plus arrival slop; beyond it the Worker waits in place rather than
+// wandering to a far field, treating the rally as a "gather here" instruction (docs/adr/0017).
+const CLAIM_RADIUS = 5;
+
 // localStorage key for per-Unit Flow assignments ({ [unit.label]: flowId }).
 const ASSIGN_KEY = 'flow-rts.assignments.v1';
 
@@ -169,16 +174,17 @@ export class MapScene extends Phaser.Scene {
     // primitives do. Move sets a goal and reads whether the Unit has arrived; the actual
     // pathing/steering runs in update()'s movement pass.
     this._world = {
-      moveToward: (unit, destTile) => {
+      moveToward: (unit, destTile, loose) => {
         // A plain Move ends any combat stance (docs/adr/0012): otherwise the combat pass would
-        // keep stopping the Unit to fight and it could never leave its post.
+        // keep stopping the Unit to fight and it could never leave its post. `loose` requests a
+        // forgiving arrival so Units sharing a destination settle nearby (docs/adr/0017).
         if (unit.combat) unit.combat = null;
-        this._movement.setGoal(unit, destTile.x, destTile.y);
+        this._movement.setGoal(unit, destTile.x, destTile.y, !!loose);
         return this._movement.arrived(unit);
       },
       position: (unit) => ({ x: unit.x, y: unit.y }),
       walkable: (tx, ty) => this.walkable(tx, ty),
-      adjacentDeposit: (unit) => this._adjacentDeposit(unit),
+      claimDeposit: (unit) => this._claimDeposit(unit),
       collect: (unit, deposit) => this._collect(unit, deposit),
       deliver: (unit) => this._deliver(unit),
       deliverTime: (unit) => this._deliverDuration(unit),
@@ -279,6 +285,7 @@ export class MapScene extends Phaser.Scene {
     runner.sprite?.destroy();
     if (runner.labelNameText) runner.labelNameText.destroy();
     if (runner.labelFlowText) runner.labelFlowText.destroy();
+    this._releaseClaim(runner); // a destroyed Worker frees its Deposit (docs/adr/0017)
     runner.run = null;
 
     // If we were inspecting this Runner, close the panel — there's nothing left to watch.
@@ -1040,28 +1047,55 @@ void main(void){
     return { x: Math.floor(unit.x / TILE), y: Math.floor((unit.y - TILE * 0.5) / TILE) };
   }
 
-  // World primitive: the nearest Deposit on a Tile 8-adjacent to the Unit, or null. Returns an
-  // opaque handle plus its gather time so the interpreter can time the gather (docs/adr/0008).
-  _adjacentDeposit(unit) {
+  // World primitive: claim the nearest unclaimed Deposit within CLAIM_RADIUS of where the Worker
+  // was rallied, and return an opaque handle + a free Tile to stand on beside it + its gather time
+  // (docs/adr/0017). At most one Worker holds a Deposit at a time, so several Workers on one shared
+  // Flow spread across the cluster instead of crowding one. null ⇒ nothing free in reach: the
+  // Gather executor then holds the cursor and the Worker waits in place until a Claim frees.
+  _claimDeposit(unit) {
     const { x: ux, y: uy } = this._unitTile(unit);
-    let best = null, bestD = Infinity;
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        if (!dx && !dy) continue;
-        const dep = this._depositByTile.get(`${ux + dx},${uy + dy}`);
-        if (!dep) continue;
-        const d = dx * dx + dy * dy;
-        if (d < bestD) { best = dep; bestD = d; }
-      }
+    let best = null, bestStand = null, bestD = Infinity;
+    for (const dep of this._deposits) {
+      if (dep.claimedBy && dep.claimedBy !== unit) continue;      // held by another Worker
+      if (this._cargoRoom(unit, dep.type) <= 0) continue;         // can't carry any more of this
+      const ddx = dep.tx - ux, ddy = dep.ty - uy;
+      if (Math.max(Math.abs(ddx), Math.abs(ddy)) > CLAIM_RADIUS) continue; // out of rally reach
+      const d = ddx * ddx + ddy * ddy;
+      if (d >= bestD) continue;
+      const stand = this._standingTileBeside(dep, ux, uy);
+      if (!stand) continue;                                       // hemmed in — ungatherable
+      best = dep; bestStand = stand; bestD = d;
     }
     if (!best) return null;
-    // Full for this Resource ⇒ nothing to gather: the Worker no-ops rather than standing idle.
-    if (this._cargoRoom(unit, best.type) <= 0) return null;
+    this._releaseClaim(unit);     // drop any prior hold before taking a new one
+    best.claimedBy = unit;
+    unit._claim = best;
     const def = getResource(best.type);
-    // Turn to face the Deposit as the gather begins (this is the gather's first tick); the Worker
-    // is stationary for the gather time, so the facing holds until it moves off.
-    unit.facePoint?.(best.tx * TILE + TILE * 0.5, best.ty * TILE + TILE * 0.5);
-    return { handle: best, gatherTime: def ? def.gatherTime : 0 };
+    return { handle: best, dest: bestStand, gatherTime: def ? def.gatherTime : 0 };
+  }
+
+  // A free Tile 8-adjacent to a Deposit (Walkable, so not the Deposit's own blocked Tile), nearest
+  // to (fromX,fromY) — where the Worker stands to gather. null when the Deposit is fully hemmed in.
+  _standingTileBeside(dep, fromX, fromY) {
+    let best = null, bestD = Infinity;
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue;
+        const tx = dep.tx + dx, ty = dep.ty + dy;
+        if (!this.walkable(tx, ty)) continue;
+        const d = (tx - fromX) ** 2 + (ty - fromY) ** 2;
+        if (d < bestD) { best = { x: tx, y: ty }; bestD = d; }
+      }
+    return best;
+  }
+
+  // Release a Worker's Claim on its Deposit so the next Worker can take it (docs/adr/0017).
+  // Idempotent. Called when Cargo fills, the Deposit empties, or the Worker is re-assigned/destroyed.
+  _releaseClaim(unit) {
+    const dep = unit && unit._claim;
+    if (!dep) return;
+    if (dep.claimedBy === unit) dep.claimedBy = null;
+    unit._claim = null;
   }
 
   // How much more of `type` this Unit can carry, given its Cargo (single slot) and capacity.
@@ -1080,12 +1114,16 @@ void main(void){
     deposit.amount -= got;
     if (unit.cargo && unit.cargo.type === deposit.type) unit.cargo.amount += got;
     else unit.cargo = { type: deposit.type, amount: got };
-    if (deposit.amount <= 0) this._removeDeposit(deposit);
+    if (deposit.amount <= 0) this._removeDeposit(deposit); // frees this Worker's Claim too
     else this._drawDepositBar(deposit); // redraw the amount-left bar on change
+    // Cargo full ⇒ leaving to deliver: release the Claim so a waiting Worker can take this
+    // Deposit (docs/adr/0017). (When the Deposit emptied, _removeDeposit already freed it.)
+    if (this._cargoRoom(unit, deposit.type) <= 0) this._releaseClaim(unit);
     this._refreshUnitLabel(unit);
   }
 
   _removeDeposit(deposit) {
+    if (deposit.claimedBy) this._releaseClaim(deposit.claimedBy); // free its Claim (docs/adr/0017)
     deposit.sprite.destroy();
     deposit._amountBar?.destroy();
     this._depositByTile.delete(`${deposit.tx},${deposit.ty}`);
@@ -1131,8 +1169,8 @@ void main(void){
     return Math.max(dx, dy) <= DELIVER_RANGE;
   }
 
-  // Pure spatial test: is any Deposit on a Tile 8-adjacent to the Unit? (Unlike adjacentDeposit,
-  // ignores whether Cargo is full — a Condition only reports state.)
+  // Pure spatial test: is any Deposit on a Tile 8-adjacent to the Unit? (Unlike _claimDeposit,
+  // ignores Claims and whether Cargo is full — a Condition only reports state.)
   _hasAdjacentDeposit(unit) {
     const { x: ux, y: uy } = this._unitTile(unit);
     for (let dy = -1; dy <= 1; dy++)
@@ -1319,6 +1357,7 @@ void main(void){
   // top. A Run only exists while the simulation is running (docs/adr/0005): paused, or with no
   // Flow assigned, it is idle.
   _startRun(runner) {
+    this._releaseClaim(runner); // a fresh Run drops any Deposit held under the old one (docs/adr/0017)
     const entry = this._running && runner.assignedFlowId ? flowLibrary.get(runner.assignedFlowId) : null;
     runner.run = entry ? startRun(entry.id, entry.model) : null;
     if (runner.run) this._log(`${runner.label} starts flow "${entry.name}"`);
