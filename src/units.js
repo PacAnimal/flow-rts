@@ -45,6 +45,83 @@ export const UNIT_TYPES = {
     buildTime: 5,
     producedBy: 'barracks',
   },
+
+  // Combat Units. Stats give each a distinct role so they fight when given an Attack-Move/Hold
+  // Flow, instead of defaulting to a 1-HP non-combatant. The Factory produces Tank/Mech; the
+  // Barracks also produces Zapper/Reaper (alongside the Marine). Chojin/Heavy Chojin remain
+  // spawn-only (not producible) for now.
+  tank: {
+    id: 'tank',
+    label: 'Tank',
+    maxHealth: 220,       // heavy armour, slow (speed set in the entity)
+    damage: 30,
+    range: 5,
+    aggroRadius: 7,
+    attackCooldown: 1.6,
+    carryCapacity: 0,
+    cost: { crystals: 200 },
+    buildTime: 18,
+    producedBy: 'factory',
+  },
+  mech: {
+    id: 'mech',
+    label: 'Mech',
+    maxHealth: 140,       // ranged bruiser
+    damage: 18,
+    range: 5,
+    aggroRadius: 7,
+    attackCooldown: 1.1,
+    carryCapacity: 0,
+    cost: { crystals: 150 },
+    buildTime: 14,
+    producedBy: 'factory',
+  },
+  zapper: {
+    id: 'zapper',
+    label: 'Zapper',
+    maxHealth: 60,        // fragile, fast-firing short-range
+    damage: 10,
+    range: 3,
+    aggroRadius: 6,
+    attackCooldown: 0.7,
+    carryCapacity: 0,
+    cost: { crystals: 75 },
+    buildTime: 8,
+    producedBy: 'barracks',
+  },
+  reaper: {
+    id: 'reaper',
+    label: 'Reaper',
+    maxHealth: 70,        // fast skirmisher (speed set in the entity)
+    damage: 14,
+    range: 2,
+    aggroRadius: 8,
+    attackCooldown: 0.9,
+    carryCapacity: 0,
+    cost: { crystals: 100 },
+    buildTime: 10,
+    producedBy: 'barracks',
+  },
+  chojin: {
+    id: 'chojin',
+    label: 'Chojin',
+    maxHealth: 110,       // melee bruiser
+    damage: 16,
+    range: 1.5,
+    aggroRadius: 6,
+    attackCooldown: 1.0,
+    carryCapacity: 0,
+  },
+  'heavy-chojin': {
+    id: 'heavy-chojin',
+    label: 'Heavy Chojin',
+    maxHealth: 200,       // heavy melee
+    damage: 28,
+    range: 1.5,
+    aggroRadius: 6,
+    attackCooldown: 1.4,
+    carryCapacity: 0,
+  },
 };
 
 export const BUILDING_TYPES = {
