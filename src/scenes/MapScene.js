@@ -865,11 +865,11 @@ void main(void){
       { tx: bar.tx + bar.tileW + 4,       ty: bar.ty - 3,                    label: 'Reaper 2',       Cls: Reaper,      dir: 'SW' },
       { tx: bar.tx,                        ty: bar.ty + bar.tileH + 2,        label: 'Biter 1',        Cls: Biter,       dir: 'N'  },
       { tx: bar.tx + bar.tileW,           ty: bar.ty + bar.tileH + 2,        label: 'Biter 2',        Cls: Biter,       dir: 'NW' },
-      { tx: cc.tx - 2,                    ty: cc.ty - 8,                     label: 'Chojin 1',       Cls: Chojin,      dir: 'SE' },
-      { tx: cc.tx + (cc.tileW / 2 | 0),   ty: cc.ty - 9,                     label: 'Heavy Chojin 1', Cls: HeavyChojin, dir: 'S'  },
-      { tx: cc.tx + cc.tileW + 2,         ty: cc.ty - 8,                     label: 'Chojin 2',       Cls: Chojin,      dir: 'SW' },
-      { tx: cc.tx - 4,                    ty: cc.ty - 6,                     label: 'Heavy Chojin 2', Cls: HeavyChojin, dir: 'E'  },
-      { tx: cc.tx + cc.tileW + 4,         ty: cc.ty - 6,                     label: 'Chojin 3',       Cls: Chojin,      dir: 'W'  },
+      { tx: cc.tx - 2,                    ty: cc.ty - 4,                     label: 'Chojin 1',       Cls: Chojin,      dir: 'SE' },
+      { tx: cc.tx + (cc.tileW / 2 | 0),   ty: cc.ty - 5,                     label: 'Heavy Chojin 1', Cls: HeavyChojin, dir: 'S'  },
+      { tx: cc.tx + cc.tileW + 2,         ty: cc.ty - 4,                     label: 'Chojin 2',       Cls: Chojin,      dir: 'SW' },
+      { tx: cc.tx - 4,                    ty: cc.ty - 3,                     label: 'Heavy Chojin 2', Cls: HeavyChojin, dir: 'E'  },
+      { tx: cc.tx + cc.tileW + 4,         ty: cc.ty - 3,                     label: 'Chojin 3',       Cls: Chojin,      dir: 'W'  },
     ];
     for (const { tx: targetX, ty: targetY, label, Cls, dir } of unitSpawns) {
       for (let r = 0; r <= 10; r++) {
