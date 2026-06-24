@@ -26,11 +26,11 @@ export class FlowLibrary {
     this.entries = [];
   }
 
-  create(name, targetKind = 'unit') {
+  create(name, targetKind = 'unit', buildingType = null) {
     const entry = {
       id: nextId(),
       name: name || `Flow ${this.entries.length + 1}`,
-      model: new FlowModel(targetKind),
+      model: new FlowModel(targetKind, buildingType),
     };
     this.entries.push(entry);
     return entry;

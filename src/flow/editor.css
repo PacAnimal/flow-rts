@@ -79,7 +79,7 @@
   letter-spacing: 0.06em;
   padding: 1px 5px;
   border-radius: 3px;
-  margin-left: 6px;
+  white-space: nowrap;
 }
 .lib-kind.kind-unit     { background: #2c4a5e; color: #bfe3ff; }
 .lib-kind.kind-building { background: #4a3b2c; color: #ffdcb0; }
@@ -90,7 +90,7 @@
   letter-spacing: 0.06em;
   padding: 1px 5px;
   border-radius: 3px;
-  margin-left: 6px;
+  white-space: nowrap;
   background: #4a3020;
   color: #ffb87a;
   border: 1px solid #7a5030;
@@ -128,23 +128,26 @@
 
 /* Library column */
 .flow-library {
-  width: 230px;
-  flex: 0 0 230px;
+  width: 248px;
+  flex: 0 0 248px;
   padding: 18px 14px;
   background: #18211a;
   border-right: 1px solid #2c3a43;
   overflow-y: auto;
 }
-.lib-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.lib-head { margin-bottom: 12px; }
 .lib-head h2 {
-  margin: 0;
+  margin: 0 0 10px;
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: #8aa0ad;
 }
+/* "New Flow" buttons wrap onto as many rows as needed instead of overflowing the column. */
+.lib-new-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .lib-new {
   font: 600 11px/1 system-ui, sans-serif;
+  white-space: nowrap;
   color: #cfe6d2;
   background: #2a3f2e;
   border: 1px solid #3d5a42;
@@ -153,11 +156,12 @@
   cursor: pointer;
 }
 .lib-new:hover { background: #345038; }
+/* Library row: a name (+ delete) line above a meta line (kind/protected badges + node count),
+   so long Flow names and building-type badges never collide or wrap awkwardly. */
 .lib-item {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
   padding: 9px 10px;
   margin-bottom: 6px;
   background: #20312a;
@@ -167,10 +171,31 @@
 }
 .lib-item:hover { background: #274034; }
 .lib-item.active { background: #2f5740; border-color: #4e8a63; }
-.lib-name { font-weight: 600; }
+.lib-item-top { display: flex; align-items: center; gap: 8px; }
+.lib-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lib-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .lib-count { font-size: 10px; color: #7e958a; }
+.lib-delete {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  font: 600 12px/1 system-ui, sans-serif;
+  color: #c08a8a;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.lib-delete:hover { color: #ff9b9b; background: #3a2626; border-color: #6a3b3b; }
 .lib-rename {
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   font: 600 13px/1 system-ui, sans-serif;
   color: #fff;
   background: #16241c;

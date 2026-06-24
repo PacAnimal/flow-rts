@@ -66,3 +66,9 @@ export function getBuildingType(id) {
 export function producibleBy(buildingKey) {
   return Object.values(UNIT_TYPES).filter((u) => u.producedBy === buildingKey);
 }
+
+// Building types that can produce at least one Unit — Command Center, Barracks (docs/adr/0016).
+// Drives the Library's per-building "new Flow" buttons: only producer Buildings get Train Flows.
+export function producerBuildings() {
+  return Object.values(BUILDING_TYPES).filter((b) => producibleBy(b.id).length > 0);
+}

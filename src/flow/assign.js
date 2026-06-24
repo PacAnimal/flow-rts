@@ -5,6 +5,7 @@
 // replaces the previous Assignment; 'None' clears it. No execution happens yet.
 
 import './editor.css';
+import { getBuildingType } from '../units.js';
 
 let overlay = null;
 let panel = null;
@@ -26,9 +27,10 @@ function close() {
 }
 
 // Open the assign overlay for a `runner` (Unit or Building). Only Flows whose targetKind matches
-// `targetKind` are offered (docs/adr/0015). `onAssigned(runner)` is called after a change so the
-// caller can refresh any on-map label. `runner.label` (optional) is shown as the title.
-export function openAssignOverlay(unit, library, targetKind, onAssigned) {
+// `targetKind` are offered (docs/adr/0015); for Buildings, `buildingType` further restricts to
+// Flows authored for that building (docs/adr/0016). `onAssigned(runner)` is called after a change
+// so the caller can refresh any on-map label. `runner.label` (optional) is shown as the title.
+export function openAssignOverlay(unit, library, targetKind, onAssigned, buildingType = null) {
   ensureDom();
   panel.replaceChildren();
 
@@ -54,12 +56,19 @@ export function openAssignOverlay(unit, library, targetKind, onAssigned) {
   };
 
   addRow(null, 'None (clear)', true);
-  // A Building-Flow cannot be assigned to a Unit and vice versa; legacy Flows default to 'unit'.
-  const flows = library.list().filter((e) => (e.model.targetKind || 'unit') === targetKind);
+  // A Building-Flow cannot be assigned to a Unit and vice versa (docs/adr/0015); a Building only
+  // sees Flows authored for its building type (docs/adr/0016). Legacy Flows default to 'unit'.
+  const flows = library.list().filter((e) => {
+    if ((e.model.targetKind || 'unit') !== targetKind) return false;
+    return targetKind !== 'building' || e.model.buildingType === buildingType;
+  });
+  const kindLabel = targetKind === 'building'
+    ? (getBuildingType(buildingType)?.label || 'building')
+    : 'unit';
   if (flows.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'assign-empty';
-    empty.textContent = `No ${targetKind} Flows yet. Open the Flow editor (F) to create one.`;
+    empty.textContent = `No ${kindLabel} Flows yet. Open the Flow editor (F) to create one.`;
     list.appendChild(empty);
   } else {
     for (const entry of flows) addRow(entry.id, entry.protected ? `${entry.name}  [Protected]` : entry.name);

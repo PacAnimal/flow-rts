@@ -304,6 +304,7 @@ export class MapScene extends Phaser.Scene {
   _train(building, params, state, dt) {
     const def = getUnitType(params.unitType);
     if (!def) return true; // nothing selected — advance
+    if (def.producedBy !== building.type) return true; // this Building can't make it (docs/adr/0016)
     if (!state.started) {
       if (!this._canAfford(def.cost)) return false; // block until affordable
       this._spend(def.cost);
@@ -1471,7 +1472,7 @@ void main(void){
           this._refreshBuildingLabel(b);
           this._saveAssignments();
           this._startRun(b);
-        });
+        }, building.type);
       }
     });
 

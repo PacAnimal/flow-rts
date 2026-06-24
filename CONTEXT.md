@@ -12,7 +12,9 @@ Runners to control them. A Flow is a shared *definition*: assigning one Flow to 
 Runners means they all run the same definition (edit it once, all run the change), while each
 Runner keeps its own execution state. Each Flow **targets one Runner kind** (Unit or Building),
 which fixes the Actions its palette offers and limits which Runners it can be assigned to — a
-Building-Flow cannot be assigned to a Unit. The editor edits one Flow at a time.
+Building-Flow cannot be assigned to a Unit. A Building-Flow further targets one **building type**
+(e.g. Command Center, Barracks), which fixes the Units its Train offers and limits it to that one
+building type. The editor edits one Flow at a time.
 _Avoid_: graph, script, program, behaviour tree
 
 **Library**:
@@ -166,7 +168,8 @@ _Avoid_: prop, scenery, obstacle (an obstacle is just a blocking Decoration, not
 A player structure occupying a Footprint of Tiles that it blocks, so Units path around it — the
 immobile kind of Runner. The Command Center is the first Building and the place a Worker delivers
 Cargo to grow the Stockpile. Unlike a Unit, a Building does not move; its Flow drives a
-building-scoped action set (e.g. producing Units) rather than movement.
+building-scoped action set (e.g. producing Units) rather than movement. Each Building has a type
+that fixes which Units it can produce — a Command Center trains Workers, a Barracks trains Marines.
 _Avoid_: structure, depot, base
 
 **Enemy**:

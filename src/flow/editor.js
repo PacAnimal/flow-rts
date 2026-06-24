@@ -8,7 +8,7 @@ import './editor.css';
 import { createStore } from './store.js';
 import { getNodeKind, getParams, getPort, nodeKindsForRunner } from './nodeKinds.js';
 import { CONDITIONS, getCondition } from '../conditions.js';
-import { UNIT_TYPES } from '../units.js';
+import { producibleBy, producerBuildings, getBuildingType } from '../units.js';
 import { pickPosition } from './positionPicker.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -103,13 +103,19 @@ export class FlowEditor {
     const libPanel = el('div', 'flow-library');
     const libHead = el('div', 'lib-head');
     libHead.appendChild(el('h2', null, 'Flow Library'));
-    // A Flow is typed by Runner kind (docs/adr/0015) — create one or the other explicitly.
+    // A Flow is typed by Runner kind (docs/adr/0015) and, for Buildings, by building type
+    // (docs/adr/0016): a Unit Flow, plus one button per producer Building (Command Center,
+    // Barracks) so each building's Train Flow offers only the Units it can make.
+    const newRow = el('div', 'lib-new-row');
     const newUnit = el('button', 'lib-new', '+ Unit');
     newUnit.addEventListener('click', () => this._newFlow('unit'));
-    libHead.appendChild(newUnit);
-    const newBuilding = el('button', 'lib-new', '+ Building');
-    newBuilding.addEventListener('click', () => this._newFlow('building'));
-    libHead.appendChild(newBuilding);
+    newRow.appendChild(newUnit);
+    for (const b of producerBuildings()) {
+      const btn = el('button', 'lib-new', `+ ${b.label}`);
+      btn.addEventListener('click', () => this._newFlow('building', b.id));
+      newRow.appendChild(btn);
+    }
+    libHead.appendChild(newRow);
     libPanel.appendChild(libHead);
     this.libList = el('div', 'lib-list');
     libPanel.appendChild(this.libList);
@@ -160,11 +166,18 @@ export class FlowEditor {
 
   // ── library ──────────────────────────────────────────────────────────────
 
-  _newFlow(targetKind = 'unit') {
-    const entry = this.library.create(undefined, targetKind);
+  _newFlow(targetKind = 'unit', buildingType = null) {
+    const entry = this.library.create(undefined, targetKind, buildingType);
     this.library.save();
     this.setFlow(entry.id);
     this._renderLibrary();
+  }
+
+  // A Flow's human-readable kind: its building type's label for a building Flow (docs/adr/0016),
+  // else "unit". Drives the canvas header and the Library row tag.
+  _kindLabel(model) {
+    if (model.targetKind === 'building') return getBuildingType(model.buildingType)?.label || 'building';
+    return 'unit';
   }
 
   // Rebuild the palette to show only the nodes valid for the current Flow's Runner kind.
@@ -186,17 +199,55 @@ export class FlowEditor {
     for (const entry of this.library.list()) {
       const row = el('div', 'lib-item');
       if (entry.id === this.currentId) row.classList.add('active');
+      row.addEventListener('click', () => { if (entry.id !== this.currentId) this.setFlow(entry.id); });
+
+      // Top line: the Flow name, plus a delete button (Protected Flows can't be deleted).
+      const top = el('div', 'lib-item-top');
       const name = el('span', 'lib-name', entry.name);
       name.title = 'Double-click to rename';
-      name.addEventListener('dblclick', () => this._renameFlow(entry.id, name));
-      row.appendChild(name);
-      row.appendChild(el('span', `lib-kind kind-${entry.model.targetKind}`, entry.model.targetKind));
-      if (entry.protected) row.appendChild(el('span', 'lib-protected', 'Protected'));
+      name.addEventListener('dblclick', (e) => { e.stopPropagation(); this._renameFlow(entry.id, name); });
+      top.appendChild(name);
+      if (!entry.protected) {
+        const del = el('button', 'lib-delete', '✕');
+        del.title = 'Delete this Flow';
+        del.addEventListener('click', (e) => { e.stopPropagation(); this._deleteFlow(entry.id); });
+        top.appendChild(del);
+      }
+      row.appendChild(top);
+
+      // Meta line: kind / protected badges + node count.
+      const meta = el('div', 'lib-meta');
+      meta.appendChild(el('span', `lib-kind kind-${entry.model.targetKind}`, this._kindLabel(entry.model)));
+      if (entry.protected) meta.appendChild(el('span', 'lib-protected', 'Protected'));
       const count = entry.model.nodes.length;
-      row.appendChild(el('span', 'lib-count', `${count} node${count === 1 ? '' : 's'}`));
-      row.addEventListener('click', () => { if (entry.id !== this.currentId) this.setFlow(entry.id); });
+      meta.appendChild(el('span', 'lib-count', `${count} node${count === 1 ? '' : 's'}`));
+      row.appendChild(meta);
+
       this.libList.appendChild(row);
     }
+  }
+
+  // Delete a Flow from the Library (Protected Flows are spared). If it was the edited Flow, fall
+  // back to another, or clear the canvas when the Library is left empty. Runners still pointing at
+  // it resolve to nothing and idle — and self-heal on reload (see MapScene._startRun).
+  _deleteFlow(id) {
+    const entry = this.library.get(id);
+    if (!entry || entry.protected) return;
+    if (!window.confirm(`Delete "${entry.name}"? This can't be undone.`)) return;
+    this.library.remove(id);
+    this.library.save();
+    if (this.currentId === id) {
+      const next = this.library.list()[0];
+      if (next) { this.setFlow(next.id); return; }
+      this.currentId = null;
+      this.model = null;
+      for (const [, nodeEl] of this.nodeEls) nodeEl.remove();
+      this.nodeEls.clear();
+      this.portEls.clear();
+      this.wireGroup.replaceChildren();
+      this.flowName.textContent = '';
+    }
+    this._renderLibrary();
   }
 
   _renameFlow(id, nameEl) {
@@ -226,7 +277,7 @@ export class FlowEditor {
     this._exitInspect();
     this.currentId = id;
     this.model = entry.model;
-    this.flowName.textContent = `${entry.name}  ·  ${entry.model.targetKind} flow`;
+    this.flowName.textContent = `${entry.name}  ·  ${this._kindLabel(entry.model)} flow`;
     this._renderPalette();
     this._render();
   }
@@ -423,7 +474,8 @@ export class FlowEditor {
   _buildParamRow(node, param) {
     if (param.type === 'condition') return this._conditionParam(node, param);
     if (param.type === 'unitType')
-      return this._selectParam(node, param, Object.values(UNIT_TYPES).map((u) => ({ value: u.id, label: u.label })));
+      return this._selectParam(node, param,
+        producibleBy(this.model.buildingType).map((u) => ({ value: u.id, label: u.label })));
     if (param.type === 'flowRef')
       return this._selectParam(node, param, this._unitFlowOptions());
     const row = el('div', 'param-row');
