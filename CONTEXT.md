@@ -204,8 +204,22 @@ A gatherable source of a Resource occupying a single Tile on the map; what a Wor
 from. A crystal cluster on the map is several Deposits on neighbouring Tiles (one Deposit per
 Tile). A Deposit blocks its Tile — no Unit can stand on or path through it — so a Worker
 gathers while standing on an adjacent Tile, i.e. *beside* the Deposit. A Deposit holds a
-finite amount of its Resource and is removed (its Tile freed) once gathered empty.
+finite amount of its Resource and is removed (its Tile freed) once gathered empty. At most one
+Worker **claims** a Deposit at a time, so several Workers gathering together spread across distinct
+Deposits rather than crowding one (see Claim).
 _Avoid_: resource node (Node is reserved), patch, source, vein
+
+**Claim**:
+A Worker's temporary hold on a single Deposit while it gathers there — the mechanism that spreads
+Workers across a cluster. At most one Worker claims a Deposit at a time; a gathering Worker takes
+the nearest *unclaimed* Deposit (within reach of where it was sent), walks to a free Tile beside it,
+and harvests. The Claim is released the moment the Worker's Cargo fills and it leaves to deliver (and
+on any abnormal end — the Worker is re-assigned or destroyed, or the Deposit is gathered empty), so a
+Deposit frees for the next Worker. If every Deposit in reach is already claimed, the Worker waits in
+place until one frees rather than crowding a claimed Deposit. A Claim is world state, not part of a
+Run, and is never saved. Distinct from an Assignment (a Flow bound to a Runner).
+_Avoid_: reservation, lock, assignment (reserved for Flow↔Runner), booking, ownership, hold (that is
+Hold Position)
 
 **Cargo**:
 The Resource amount a Unit is currently carrying — a single {Resource, amount} slot (a Unit
