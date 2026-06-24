@@ -10,12 +10,25 @@ import { FlowModel } from './flow/model.js';
 // spawn point. Each spawned Enemy is born running the rush Flow below (born-with-a-Flow, ADR-0013).
 export const SCENARIO = {
   name: 'Survival',
+  // Chojins are the only enemy for now (more Chojin types to come). Heavy Chojins join the
+  // later waves as the heavy melee threat the player must survive. Waves are spread across
+  // ~10 minutes (roughly 1-2 per minute), escalating in count and Heavy mix toward the end.
   waves: [
-    { at: 8,  count: 3,  unitType: 'marine', spawn: 'left'   },
-    { at: 25, count: 4,  unitType: 'marine', spawn: 'right'  },
-    { at: 45, count: 6,  unitType: 'marine', spawn: 'top'    },
-    { at: 70, count: 8,  unitType: 'marine', spawn: 'bottom' },
-    { at: 95, count: 12, unitType: 'marine', spawn: 'left'   },
+    { at: 20,  count: 3,  unitType: 'chojin',       spawn: 'left'   },
+    { at: 50,  count: 4,  unitType: 'chojin',       spawn: 'right'  },
+    { at: 90,  count: 5,  unitType: 'chojin',       spawn: 'top'    },
+    { at: 130, count: 6,  unitType: 'chojin',       spawn: 'bottom' },
+    { at: 170, count: 2,  unitType: 'heavy-chojin', spawn: 'left'   },
+    { at: 210, count: 8,  unitType: 'chojin',       spawn: 'right'  },
+    { at: 250, count: 3,  unitType: 'heavy-chojin', spawn: 'top'    },
+    { at: 300, count: 10, unitType: 'chojin',       spawn: 'bottom' },
+    { at: 340, count: 4,  unitType: 'heavy-chojin', spawn: 'left'   },
+    { at: 385, count: 12, unitType: 'chojin',       spawn: 'right'  },
+    { at: 430, count: 5,  unitType: 'heavy-chojin', spawn: 'top'    },
+    { at: 470, count: 12, unitType: 'chojin',       spawn: 'bottom' },
+    { at: 510, count: 6,  unitType: 'heavy-chojin', spawn: 'left'   },
+    { at: 550, count: 14, unitType: 'chojin',       spawn: 'right'  },
+    { at: 590, count: 8,  unitType: 'heavy-chojin', spawn: 'top'    },
   ],
 };
 

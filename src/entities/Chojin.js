@@ -3,7 +3,7 @@ import { TILE } from '../constants.js';
 import { FACTION } from '../units.js';
 
 export class Chojin extends Unit {
-  constructor(scene, x, y) {
-    super(scene, x, y, 'chojin', TILE, FACTION.PLAYER, 3.5);
+  constructor(scene, x, y, faction = FACTION.PLAYER) {
+    super(scene, x, y, 'chojin', TILE, faction, 3.5);
   }
 }
