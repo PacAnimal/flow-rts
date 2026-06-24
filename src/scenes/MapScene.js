@@ -30,7 +30,7 @@ const MAP_W = 120;
 const MAP_H = 90;
 
 // Unit type id → class, for spawning produced/Enemy Units by type (docs/adr/0013, 0014).
-const UNIT_CLASS = { worker: Worker, marine: Marine, zapper: Zapper, reaper: Reaper, tank: Tank, mech: Mech };
+const UNIT_CLASS = { worker: Worker, marine: Marine, zapper: Zapper, reaper: Reaper, tank: Tank, mech: Mech, chojin: Chojin, 'heavy-chojin': HeavyChojin };
 
 // Label styles for units: name in light grey, running flow in electric blue.
 const LABEL_NAME_STYLE = {
@@ -1237,11 +1237,6 @@ void main(void){
       { tx: bar.tx - 3,                   ty: bar.ty + bar.tileH,            label: 'Zapper',       Cls: Zapper,      dir: 'SE' },
       { tx: bar.tx + bar.tileW + 2,       ty: bar.ty - 3,                    label: 'Reaper',       Cls: Reaper,      dir: 'S'  },
       { tx: bar.tx + bar.tileW + 4,       ty: bar.ty - 3,                    label: 'Reaper',       Cls: Reaper,      dir: 'SW' },
-      { tx: cc.tx - 2,                    ty: cc.ty - 4,                     label: 'Chojin',       Cls: Chojin,      dir: 'SE' },
-      { tx: cc.tx + (cc.tileW / 2 | 0),   ty: cc.ty - 5,                     label: 'Heavy Chojin', Cls: HeavyChojin, dir: 'S'  },
-      { tx: cc.tx + cc.tileW + 2,         ty: cc.ty - 4,                     label: 'Chojin',       Cls: Chojin,      dir: 'SW' },
-      { tx: cc.tx - 4,                    ty: cc.ty - 3,                     label: 'Heavy Chojin', Cls: HeavyChojin, dir: 'E'  },
-      { tx: cc.tx + cc.tileW + 4,         ty: cc.ty - 3,                     label: 'Chojin',       Cls: Chojin,      dir: 'W'  },
     ];
     // 30 biters in a staggered grid across the whole map, placed away from the base
     const DIRS8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];

@@ -11,11 +11,16 @@ import { FlowModel } from './flow/model.js';
 export const SCENARIO = {
   name: 'Survival',
   waves: [
-    { at: 8,  count: 3,  unitType: 'marine', spawn: 'left'   },
-    { at: 25, count: 4,  unitType: 'marine', spawn: 'right'  },
-    { at: 45, count: 6,  unitType: 'marine', spawn: 'top'    },
-    { at: 70, count: 8,  unitType: 'marine', spawn: 'bottom' },
-    { at: 95, count: 12, unitType: 'marine', spawn: 'left'   },
+    { at: 8,   count: 3,  unitType: 'marine',       spawn: 'left'   },
+    { at: 25,  count: 4,  unitType: 'marine',       spawn: 'right'  },
+    { at: 45,  count: 6,  unitType: 'marine',       spawn: 'top'    },
+    { at: 70,  count: 8,  unitType: 'marine',       spawn: 'bottom' },
+    { at: 95,  count: 12, unitType: 'marine',       spawn: 'left'   },
+    // Late waves bring the Chojins — the heavy melee enemy the player must now survive.
+    { at: 120, count: 3,  unitType: 'chojin',       spawn: 'right'  },
+    { at: 150, count: 4,  unitType: 'chojin',       spawn: 'top'    },
+    { at: 185, count: 2,  unitType: 'heavy-chojin', spawn: 'bottom' },
+    { at: 220, count: 4,  unitType: 'heavy-chojin', spawn: 'left'   },
   ],
 };
 
