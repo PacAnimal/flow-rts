@@ -22,6 +22,11 @@ export class Building {
     this.sprite.setScale(tileW * TILE / natural);
     this.sprite.setDepth(py);
 
+    // soft dark glow tracing the building's actual silhouette (preFX = WebGL only)
+    if (this.sprite.preFX) {
+      this.sprite.preFX.addGlow(0x080808, 3, 0, false, 0.05, 8);
+    }
+
     // Buildings are Runners too (CONTEXT.md): Faction + Health, destructible from the start.
     const def = getBuildingType(textureKey);
     attachHealth(this, def ? def.maxHealth : 1000, faction);
