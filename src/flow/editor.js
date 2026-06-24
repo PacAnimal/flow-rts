@@ -6,7 +6,7 @@
 
 import './editor.css';
 import { createStore } from './store.js';
-import { getNodeKind, getParams, nodeKindsForRunner } from './nodeKinds.js';
+import { getNodeKind, getParams, getPort, nodeKindsForRunner } from './nodeKinds.js';
 import { CONDITIONS, getCondition } from '../conditions.js';
 import { UNIT_TYPES } from '../units.js';
 import { pickPosition } from './positionPicker.js';
@@ -52,7 +52,7 @@ export class FlowEditor {
     }
   }
 
-  hide() { this.visible = false; this._applyVisibility(); }
+  hide() { this._closeNodeMenu(); this.visible = false; this._applyVisibility(); }
 
   _applyVisibility() {
     this.root.classList.toggle('hidden', !this.visible);
@@ -513,7 +513,15 @@ export class FlowEditor {
       this.tempPath.classList.remove('active');
       this.tempPath.removeAttribute('d');
       const target = portUnder(ev.clientX, ev.clientY);
-      if (!target) return;
+      if (!target) {
+        // Released on the empty Canvas. Dragging from an Exec output offers the node menu:
+        // create-and-connect, splicing into any existing downstream wire. Inputs don't trigger it.
+        const sourcePort = getPort(this.model.getNode(source.node)?.kind, source.port);
+        if (source.dir === 'out' && sourcePort?.type === 'exec' && this._isInsideCanvas(ev.clientX, ev.clientY)) {
+          this._openNodeMenu(ev.clientX, ev.clientY, this._canvasPoint(ev.clientX, ev.clientY), source, this._downstreamOf(source));
+        }
+        return;
+      }
       const out = source.dir === 'out' ? source : target.dir === 'out' ? target : null;
       const inn = source.dir === 'in' ? source : target.dir === 'in' ? target : null;
       if (!out || !inn) return;
@@ -524,6 +532,98 @@ export class FlowEditor {
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
+  }
+
+  // ── node menu (drag an Exec output onto empty Canvas) ───────────────────────
+
+  _isInsideCanvas(clientX, clientY) {
+    const c = this.canvasEl.getBoundingClientRect();
+    return clientX >= c.left && clientX <= c.right && clientY >= c.top && clientY <= c.bottom;
+  }
+
+  // The node an Exec output currently feeds, if any (out=1, so at most one). Captured before a
+  // splice rewires the output, so the new node can re-attach the tail to the same input port.
+  _downstreamOf(source) {
+    const c = this.model.connections.find(
+      (x) => x.from.node === source.node && x.from.port === source.port,
+    );
+    return c ? { node: c.to.node, port: c.to.port } : null;
+  }
+
+  // Popup of node kinds valid for this Flow that can receive an Exec connection. Picking one
+  // creates it at the drop point and splices it after `source` (see _spliceNode). Typeahead
+  // filter is auto-focused; Enter picks a sole match; Esc / click-outside cancels.
+  _openNodeMenu(clientX, clientY, drop, source, downstream) {
+    this._closeNodeMenu();
+    const menu = el('div', 'flow-node-menu');
+    menu.style.left = `${clientX}px`;
+    menu.style.top = `${clientY}px`;
+
+    const filter = el('input', 'node-menu-filter');
+    filter.type = 'text';
+    filter.placeholder = 'Add node…';
+    menu.appendChild(filter);
+
+    const list = el('div', 'node-menu-list');
+    menu.appendChild(list);
+
+    // Only kinds that can receive the Exec connection — i.e. have an Exec input (excludes Events).
+    const kinds = nodeKindsForRunner(this.model.targetKind).filter((k) => firstExecPort(k, 'in'));
+    const pick = (kind) => { this._spliceNode(kind, drop, source, downstream); this._closeNodeMenu(); };
+    const items = kinds.map((k) => {
+      const item = el('div', `palette-item node-menu-item category-${k.category}`);
+      item.appendChild(el('span', 'palette-title', k.title));
+      item.appendChild(el('span', 'palette-tag', k.category));
+      item.addEventListener('click', () => pick(k.kind));
+      list.appendChild(item);
+      return { k, item };
+    });
+
+    const applyFilter = () => {
+      const q = filter.value.trim().toLowerCase();
+      for (const { k, item } of items) item.style.display = !q || k.title.toLowerCase().includes(q) ? '' : 'none';
+    };
+    filter.addEventListener('input', applyFilter);
+    filter.addEventListener('keydown', (e) => {
+      e.stopPropagation(); // keep typing local to the menu
+      if (e.key === 'Escape') { this._closeNodeMenu(); return; }
+      if (e.key === 'Enter') {
+        const shown = items.filter(({ item }) => item.style.display !== 'none');
+        if (shown.length === 1) pick(shown[0].k.kind);
+      }
+    });
+
+    const onDocPointerDown = (e) => { if (!menu.contains(e.target)) this._closeNodeMenu(); };
+    this._nodeMenu = { el: menu, onDocPointerDown };
+    document.body.appendChild(menu);
+    // Clamp into the viewport now that it has a measured size.
+    const r = menu.getBoundingClientRect();
+    if (r.right > window.innerWidth) menu.style.left = `${Math.max(4, window.innerWidth - r.width - 4)}px`;
+    if (r.bottom > window.innerHeight) menu.style.top = `${Math.max(4, window.innerHeight - r.height - 4)}px`;
+    document.addEventListener('pointerdown', onDocPointerDown);
+    filter.focus();
+  }
+
+  _closeNodeMenu() {
+    if (!this._nodeMenu) return;
+    document.removeEventListener('pointerdown', this._nodeMenu.onDocPointerDown);
+    this._nodeMenu.el.remove();
+    this._nodeMenu = null;
+  }
+
+  // Create `kind` at the drop point and wire it after `source` in one commit. Connecting the
+  // source's Exec output replaces its old wire (out=1); if that wire had a `downstream` target
+  // and the new node has an Exec output, re-attach the tail so the node is spliced into the chain.
+  _spliceNode(kind, drop, source, downstream) {
+    this.commit((m) => {
+      const node = m.addNode(kind, drop.x - 60, drop.y - 14);
+      const inPort = firstExecPort(getNodeKind(kind), 'in');
+      if (inPort) m.connect({ node: source.node, port: source.port }, { node: node.id, port: inPort.id });
+      const outPort = firstExecPort(getNodeKind(kind), 'out');
+      if (downstream && outPort) {
+        m.connect({ node: node.id, port: outPort.id }, { node: downstream.node, port: downstream.port });
+      }
+    });
   }
 }
 
@@ -545,6 +645,10 @@ function paramText(param, value) {
 function wirePath(a, b) {
   const dx = Math.max(40, Math.abs(b.x - a.x) * 0.5);
   return `M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}`;
+}
+
+function firstExecPort(kindDef, dir) {
+  return kindDef.ports.find((p) => p.dir === dir && p.type === 'exec') || null;
 }
 
 function portUnder(clientX, clientY) {

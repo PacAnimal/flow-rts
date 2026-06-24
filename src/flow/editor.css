@@ -208,6 +208,34 @@
 .category-action { border-left-color: #3a7bd5; }
 .category-control { border-left-color: #9b6cd5; }
 
+/* Node menu — opened by dragging an Exec output onto the empty Canvas. */
+.flow-node-menu {
+  position: fixed;
+  z-index: 1300; /* above the editor overlay (1150) and the drag ghost (1250) */
+  width: 210px;
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  background: #1b252b;
+  border: 1px solid #33454f;
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  color: #e6eef2; /* appended to <body>, so it doesn't inherit the editor's light text */
+}
+.node-menu-filter {
+  margin-bottom: 8px;
+  padding: 7px 9px;
+  background: #232f37;
+  border: 1px solid #33454f;
+  border-radius: 6px;
+  color: #e6eef2;
+  font: inherit;
+}
+.node-menu-filter:focus { outline: none; border-color: #3a7bd5; }
+.node-menu-list { overflow-y: auto; }
+.node-menu-item { cursor: pointer; margin-bottom: 4px; }
+
 /* Canvas */
 .flow-canvas {
   position: relative;
