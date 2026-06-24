@@ -142,6 +142,7 @@ export class FlowEditor {
       name.addEventListener('dblclick', () => this._renameFlow(entry.id, name));
       row.appendChild(name);
       row.appendChild(el('span', `lib-kind kind-${entry.model.targetKind}`, entry.model.targetKind));
+      if (entry.protected) row.appendChild(el('span', 'lib-protected', 'Protected'));
       const count = entry.model.nodes.length;
       row.appendChild(el('span', 'lib-count', `${count} node${count === 1 ? '' : 's'}`));
       row.addEventListener('click', () => { if (entry.id !== this.currentId) this.setFlow(entry.id); });

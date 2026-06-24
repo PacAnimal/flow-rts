@@ -5,11 +5,20 @@
 // Engine-agnostic: no Phaser, no game state. range/aggroRadius are in Tiles (the world converts
 // to pixels). Adding a unit or building type is a new entry here.
 
-// Which side a Runner belongs to (CONTEXT.md Faction). Two sides for a survival level; more
-// (neutral, further players) can be added later.
-export const FACTION = { PLAYER: 'player', ENEMY: 'enemy' };
+// Which side a Runner belongs to (CONTEXT.md Faction). CRITTER is a third side hostile to both.
+export const FACTION = { PLAYER: 'player', ENEMY: 'enemy', CRITTER: 'critter' };
 
 export const UNIT_TYPES = {
+  biter: {
+    id: 'biter',
+    label: 'Biter',
+    maxHealth: 90,
+    damage: 14,
+    range: 1.5,
+    aggroRadius: 10,     // aggressive — peels off at anything within sight
+    attackCooldown: 1.3,
+    carryCapacity: 0,
+  },
   worker: {
     id: 'worker',
     label: 'Worker',

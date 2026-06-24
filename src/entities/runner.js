@@ -26,14 +26,13 @@ export function applyDamage(entity, amount) {
 export function drawHealthBar(entity, cx, topY, w) {
   const g = entity._healthBar;
   if (!g) return;
-  if (entity.health >= entity.maxHealth || entity.health <= 0) { g.setVisible(false); return; }
+  if (entity.health <= 0) { g.setVisible(false); return; }
   const frac = entity.health / entity.maxHealth;
   const h = 5;
   const x = cx - w / 2;
   g.clear();
-  g.fillStyle(0x000000, 0.6).fillRect(x - 1, topY - 1, w + 2, h + 2);
-  const col = frac > 0.5 ? 0x4caf50 : frac > 0.25 ? 0xffb300 : 0xe53935;
-  g.fillStyle(col, 1).fillRect(x, topY, w * frac, h);
+  g.fillStyle(0x5a0000, 1).fillRect(x, topY, w, h);
+  g.fillStyle(0xdd1111, 1).fillRect(x, topY, w * frac, h);
   g.setDepth(2e6).setVisible(true);
 }
 

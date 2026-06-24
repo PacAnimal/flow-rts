@@ -137,6 +137,20 @@ export const NODE_KINDS = {
     ],
   },
 
+  RoamAttack: {
+    kind: 'RoamAttack',
+    category: 'action',
+    runner: 'unit',
+    title: 'Roam and Attack',
+    // Pick a random tile within sight, attack-move there engaging anything on the way, then
+    // complete so the caller can loop or chain. Designed as the critter behaviour node.
+    protected: true,
+    ports: [
+      { id: 'in',  dir: 'in',  type: 'exec', label: '' },
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+  },
+
   Branch: {
     kind: 'Branch',
     category: 'control',

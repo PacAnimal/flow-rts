@@ -19,6 +19,18 @@ export const SCENARIO = {
   ],
 };
 
+// Critter roam behaviour: OnStart → RoamAttack (self-looping). The back-edge is pushed
+// directly into connections to bypass the API's self-connect guard — the runtime handles
+// self-loops fine (it resets state on each advance, so the biter picks a new destination).
+export function critterFlowModel() {
+  const m = new FlowModel();
+  const start = m.addNode('OnStart', 40, 40);
+  const roam = m.addNode('RoamAttack', 40, 140);
+  m.connect({ node: start.id, port: 'out' }, { node: roam.id, port: 'in' });
+  m.connections.push({ id: 'conn_roam_loop', from: { node: roam.id, port: 'out' }, to: { node: roam.id, port: 'in' } });
+  return m;
+}
+
 // The Enemy rush behaviour, authored as data: OnStart → Attack-Move toward the player's base.
 // Attack-Move engages anything in its aggro radius on the way in (docs/adr/0012), so Enemies
 // fight Units they pass and then hammer the Command Center on arrival.

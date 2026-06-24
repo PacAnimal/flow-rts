@@ -32,7 +32,7 @@ export class Unit {
 
   // Reposition the health bar above the sprite; called each frame as the Unit moves.
   syncHealthBar() {
-    drawHealthBar(this, this.x, this.y - this._displaySize - 4, this._displaySize * 0.8);
+    drawHealthBar(this, this.x, this.y - this._displaySize - 6, this._displaySize * 0.8);
   }
 
   _applyScale() {

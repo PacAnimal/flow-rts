@@ -84,6 +84,18 @@
 .lib-kind.kind-unit     { background: #2c4a5e; color: #bfe3ff; }
 .lib-kind.kind-building { background: #4a3b2c; color: #ffdcb0; }
 
+.lib-protected {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 6px;
+  background: #4a3020;
+  color: #ffb87a;
+  border: 1px solid #7a5030;
+}
+
 .flow-editor {
   position: fixed;
   inset: 0;

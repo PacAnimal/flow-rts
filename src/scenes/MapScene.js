@@ -22,7 +22,7 @@ import { DECORATIONS } from '../decorations.js';
 import { FACTION, getUnitType, getBuildingType } from '../units.js';
 import { applyDamage } from '../entities/runner.js';
 import { CombatSystem } from '../combat.js';
-import { SCENARIO, enemyFlowModel } from '../scenario.js';
+import { SCENARIO, enemyFlowModel, critterFlowModel } from '../scenario.js';
 import '../flow/editor.css'; // shared overlay chrome — styles the Start/Pause button
 const MAP_W = 120;
 const MAP_H = 90;
@@ -121,6 +121,7 @@ export class MapScene extends Phaser.Scene {
     if (!groundOnly) this._spawnBuildings();   // reserve command-center footprint + start clearance first
     if (!groundOnly) this._placeCrystals();    // clustered crystal Deposits (docs/adr/0009)
     if (!groundOnly) this._placeDecorations(); // trees — scattered, no overlap (docs/adr/0009)
+    this._critterFlowId = this._ensureCritterFlow();
     if (!groundOnly) this._spawnUnits();
     this._setupCamera();
     this.input.mouse?.disableContextMenu(); // allow right-click as a cancel gesture
@@ -164,6 +165,7 @@ export class MapScene extends Phaser.Scene {
       attackMove: (unit, dest) => this._setCombat(unit, 'attackmove', dest),
       hold: (unit) => this._setCombat(unit, 'hold', null),
       attackMoveArrived: (unit) => this._movement.arrived(unit) && !(unit.combat && unit.combat.engaged),
+      roamDest: (unit) => this._roamDest(unit),
       // Production (docs/adr/0013): a building-scoped Action ticked on a Building Runner.
       train: (building, params, state, dt) => this._train(building, params, state, dt),
     };
@@ -410,6 +412,35 @@ export class MapScene extends Phaser.Scene {
           if (this.walkable(x, y) && !this._isHill(x, y - 1)) return { x, y };
         }
     return null;
+  }
+
+  // Create (or find) the shared critter roam Flow in the Library. Returns its id.
+  // Skips creation if a protected unit Flow already exists (survives reloads via localStorage).
+  _ensureCritterFlow() {
+    const existing = flowLibrary.list().find((e) => e.protected && e.model.targetKind === 'unit');
+    if (existing) return existing.id;
+    const entry = flowLibrary.create('Biter Roam');
+    entry.model = critterFlowModel();
+    entry.protected = true;
+    flowLibrary.save();
+    return entry.id;
+  }
+
+  // Pick a random walkable tile within ROAM_RADIUS tiles of the unit, used by RoamAttack.
+  _roamDest(unit) {
+    const ROAM_RADIUS = 15;
+    const tx = Math.floor(unit.x / TILE);
+    const ty = Math.floor((unit.y - TILE * 0.5) / TILE);
+    for (let i = 0; i < 25; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const r = 5 + Math.random() * ROAM_RADIUS;
+      const nx = Math.round(tx + Math.cos(angle) * r);
+      const ny = Math.round(ty + Math.sin(angle) * r);
+      if (nx >= 0 && nx < MAP_W && ny >= 0 && ny < MAP_H && this.walkable(nx, ny)) {
+        return { x: nx, y: ny };
+      }
+    }
+    return { x: tx, y: ty };
   }
 
   // Objective check each frame (docs/adr/0014): victory once every Wave has spawned and no
@@ -1143,6 +1174,7 @@ void main(void){
       .setOrigin(0.5, 1).setDepth(1e6);
     this.buildings.push(b);
     this._refreshBuildingLabel(b);
+    b.syncHealthBar();
     this._startRun(b);
   }
 
@@ -1173,24 +1205,42 @@ void main(void){
       { tx: bar.tx - 3,                   ty: bar.ty + bar.tileH,            label: 'Zapper 2',       Cls: Zapper,      dir: 'SE' },
       { tx: bar.tx + bar.tileW + 2,       ty: bar.ty - 3,                    label: 'Reaper 1',       Cls: Reaper,      dir: 'S'  },
       { tx: bar.tx + bar.tileW + 4,       ty: bar.ty - 3,                    label: 'Reaper 2',       Cls: Reaper,      dir: 'SW' },
-      { tx: bar.tx,                        ty: bar.ty + bar.tileH + 2,        label: 'Biter 1',        Cls: Biter,       dir: 'N'  },
-      { tx: bar.tx + bar.tileW,           ty: bar.ty + bar.tileH + 2,        label: 'Biter 2',        Cls: Biter,       dir: 'NW' },
       { tx: cc.tx - 2,                    ty: cc.ty - 4,                     label: 'Chojin 1',       Cls: Chojin,      dir: 'SE' },
       { tx: cc.tx + (cc.tileW / 2 | 0),   ty: cc.ty - 5,                     label: 'Heavy Chojin 1', Cls: HeavyChojin, dir: 'S'  },
       { tx: cc.tx + cc.tileW + 2,         ty: cc.ty - 4,                     label: 'Chojin 2',       Cls: Chojin,      dir: 'SW' },
       { tx: cc.tx - 4,                    ty: cc.ty - 3,                     label: 'Heavy Chojin 2', Cls: HeavyChojin, dir: 'E'  },
       { tx: cc.tx + cc.tileW + 4,         ty: cc.ty - 3,                     label: 'Chojin 3',       Cls: Chojin,      dir: 'W'  },
     ];
-    for (const { tx: targetX, ty: targetY, label, Cls, dir } of unitSpawns) {
+    // 30 biters in a staggered grid across the whole map, placed away from the base
+    const DIRS8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+    const biterSpawns = Array.from({ length: 30 }, (_, i) => ({
+      tx: 8 + (i % 6) * 18 + (Math.floor(i / 6) % 2) * 7,
+      ty: 6 + Math.floor(i / 6) * 16,
+      label: `Biter ${i + 1}`,
+      dir: DIRS8[i % 8],
+    }));
+    const allSpawns = [
+      ...unitSpawns.map(s => ({ ...s, critter: false })),
+      ...biterSpawns.map(s => ({ ...s, Cls: Biter, critter: true })),
+    ];
+    for (const { tx: targetX, ty: targetY, label, Cls, dir, critter } of allSpawns) {
       for (let r = 0; r <= 10; r++) {
         let placed = false;
         for (let dy = -r; dy <= r && !placed; dy++) {
           for (let dx = -r; dx <= r && !placed; dx++) {
             if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
             const tx = targetX + dx, ty = targetY + dy;
-            if (this.walkable(tx, ty) && !this._isHill(tx, ty - 1)) {
+            const nearBase = critter && this._commandCenter && (() => {
+              const bcc = this._commandCenter;
+              return Math.hypot(tx - (bcc.tx + bcc.tileW * 0.5), ty - (bcc.ty + bcc.tileH * 0.5)) < 28;
+            })();
+            if (this.walkable(tx, ty) && !this._isHill(tx, ty - 1) && !nearBase) {
               const unit = new Cls(this, tx * TILE + TILE * 0.5, ty * TILE + TILE);
               this._registerUnit(unit, label);
+              if (critter) {
+                unit.assignedFlowId = this._critterFlowId;
+                this._refreshUnitLabel(unit);
+              }
               unit.setDirection(dir);
               placed = true;
             }
@@ -1216,6 +1266,7 @@ void main(void){
 
     this.units.push(unit);
     this._refreshUnitLabel(unit);
+    unit.syncHealthBar();
     this._startRun(unit);
   }
 

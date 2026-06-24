@@ -62,7 +62,7 @@ export function openAssignOverlay(unit, library, targetKind, onAssigned) {
     empty.textContent = `No ${targetKind} Flows yet. Open the Flow editor (F) to create one.`;
     list.appendChild(empty);
   } else {
-    for (const entry of flows) addRow(entry.id, entry.name);
+    for (const entry of flows) addRow(entry.id, entry.protected ? `${entry.name}  [Protected]` : entry.name);
   }
 
   panel.appendChild(list);

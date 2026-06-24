@@ -76,6 +76,19 @@ const EXECUTORS = {
   Train: (node, runner, world, dt, state) =>
     world.train(runner, node.params || {}, state, dt) ? done() : RUNNING,
 
+  // Pick a random nearby walkable tile, attack-move there (engaging anything en route), and
+  // complete on arrival so callers can loop or chain. Always waits at least one frame before
+  // checking arrival so the movement system has time to set mv.arrived = false.
+  RoamAttack: (node, runner, world, dt, state) => {
+    if (!state.roaming) {
+      state.roaming = true;
+      const dest = world.roamDest ? world.roamDest(runner) : null;
+      if (dest) world.attackMove(runner, dest);
+      return RUNNING;
+    }
+    return world.attackMoveArrived(runner) ? done() : RUNNING;
+  },
+
   // Hold the cursor for `duration` seconds, accumulating elapsed time in the node's scratch
   // state. Unset or non-positive duration is a no-op (ADR-0004) — advance immediately.
   Wait: (node, runner, world, dt, state) => {

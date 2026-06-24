@@ -58,7 +58,10 @@ export class FlowLibrary {
 
   toJSON() {
     return {
-      entries: this.entries.map((e) => ({ id: e.id, name: e.name, model: e.model.toJSON() })),
+      entries: this.entries.map((e) => ({
+        id: e.id, name: e.name, model: e.model.toJSON(),
+        ...(e.protected ? { protected: true } : {}),
+      })),
     };
   }
 
@@ -78,6 +81,7 @@ export class FlowLibrary {
         id: e.id,
         name: e.name,
         model: FlowModel.fromJSON(e.model),
+        ...(e.protected ? { protected: true } : {}),
       }));
       bumpSeqFrom(this.entries.map((e) => e.id));
     } catch { /* corrupt — start empty */ }
