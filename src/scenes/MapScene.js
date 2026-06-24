@@ -1250,8 +1250,8 @@ void main(void){
         drag = { ox: p.x, oy: p.y, sx: cam.scrollX, sy: cam.scrollY };
         return;
       }
-      // Clicking a Unit selects it (handled by gameobjectup) — don't start a camera drag.
-      if (over.length) return;
+      // Track a potential drag even when pressing on a Runner, so panning works no matter where
+      // the gesture starts. A clean click still selects it (gameobjectup bails once _dragMoved).
       drag = { ox: p.x, oy: p.y, sx: cam.scrollX, sy: cam.scrollY };
       this.game.canvas.style.cursor = 'grabbing';
     });
