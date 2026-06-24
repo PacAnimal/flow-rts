@@ -71,6 +71,7 @@ export class MapScene extends Phaser.Scene {
   constructor() { super('MapScene'); }
 
   preload() {
+    this.load.image('unit_shadow', '/sprites/unit_shadow.png');
     this.load.image('command_center', '/sprites/command_center.png');
     this.load.image('barracks', '/sprites/barracks.png');
     this.load.image('factory', '/sprites/factory.png');
@@ -227,6 +228,7 @@ export class MapScene extends Phaser.Scene {
   }
 
   _destroyRunner(runner) {
+    runner._shadow?.destroy();
     runner._healthBar?.destroy();
     runner.sprite?.destroy();
     if (runner.labelText) runner.labelText.destroy();
@@ -1266,6 +1268,7 @@ void main(void){
 
     this.units.push(unit);
     this._refreshUnitLabel(unit);
+    unit.syncShadow();
     unit.syncHealthBar();
     this._startRun(unit);
   }
@@ -1357,6 +1360,7 @@ void main(void){
     unit.sprite.setPosition(unit.x, unit.y);
     unit.sprite.setDepth(unit.y);
     unit.labelText.setPosition(unit.x, unit.y - TILE - 6);
+    unit.syncShadow();
     unit.syncHealthBar();
   }
 

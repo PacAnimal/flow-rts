@@ -29,6 +29,6 @@ export class Building {
 
   // Buildings don't move, so the bar is redrawn only when Health changes.
   syncHealthBar() {
-    drawHealthBar(this, this._cx, this._top - 8, this.tileW * TILE * 0.7);
+    drawHealthBar(this, this._cx, this.sprite.y - this.sprite.displayHeight - 8, this.tileW * TILE * 0.7);
   }
 }

@@ -21,6 +21,12 @@ export class Unit {
     const def = getUnitType(texturePrefix);
     this.carryCapacity = def ? def.carryCapacity : 0;
 
+    this._shadow = scene.add.image(x, y, 'unit_shadow').setDepth(1).setOrigin(0.5, 0.5);
+    this._shadowAlpha = 1.0;
+    this._shadowW     = 2.0;  // ellipse width as fraction of displaySize
+    this._shadowH     = 0.55; // ellipse height as fraction of displaySize
+    this._shadowYOff  = 0;    // extra y offset (reapers use this to show hover gap)
+
     this.sprite = scene.add.image(x, y, `${texturePrefix}_S`);
     this.sprite.setOrigin(0.5, 1);
     this._applyScale();
@@ -28,6 +34,14 @@ export class Unit {
 
     // Runner state: Faction + Health (CONTEXT.md).
     attachHealth(this, def ? def.maxHealth : 1, faction);
+  }
+
+  syncShadow() {
+    const w = this._displaySize * this._shadowW;
+    const h = this._displaySize * this._shadowH;
+    this._shadow.setPosition(this.x, this.y - 2 + this._shadowYOff);
+    this._shadow.setDisplaySize(w, h);
+    this._shadow.setAlpha(this._shadowAlpha);
   }
 
   // Reposition the health bar above the sprite; called each frame as the Unit moves.
