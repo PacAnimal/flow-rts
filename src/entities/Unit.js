@@ -3,7 +3,7 @@ import { TILE, UNIT_SPEED } from '../constants.js';
 // directions in clockwise order, matching angle buckets
 const DIRS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
-import { attachHealth, drawHealthBar } from './runner.js';
+import { attachHealth } from './runner.js';
 import { getUnitType, FACTION } from '../units.js';
 
 export class Unit {
@@ -47,11 +47,6 @@ export class Unit {
     this._shadow.setPosition(this.x, this.y - 2 + this._shadowYOff);
     this._shadow.setDisplaySize(w, h);
     this._shadow.setAlpha(this._shadowAlpha);
-  }
-
-  // Reposition the health bar above the sprite; called each frame as the Unit moves.
-  syncHealthBar() {
-    drawHealthBar(this, this.x, this.y - this._displaySize - 6, this._displaySize * 0.8);
   }
 
   _applyScale() {
