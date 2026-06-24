@@ -79,15 +79,16 @@ export const UNIT_TYPES = {
   zapper: {
     id: 'zapper',
     label: 'Zapper',
-    maxHealth: 60,        // fragile, fast-firing short-range
+    maxHealth: 60,        // fragile, fast-firing close-quarters bruiser
     damage: 10,
-    range: 3,
+    range: 2,             // a "long-range melee" reach — zaps just beyond arm's length
     aggroRadius: 6,
     attackCooldown: 0.7,
     carryCapacity: 0,
     cost: { crystals: 75 },
     buildTime: 8,
     producedBy: 'barracks',
+    attackFx: 'lightning', // crackling arc, not the generic laser bolt (see effects.js)
   },
   reaper: {
     id: 'reaper',

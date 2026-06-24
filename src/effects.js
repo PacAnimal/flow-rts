@@ -30,16 +30,59 @@ export class AttackEffects {
     return entity.y - (entity._displaySize || TILE) * 0.45;
   }
 
-  // Entry point: pick the effect from the attacker's reach (in Tiles). Melee Units sit at
-  // range 1.5; anything reaching ~2+ Tiles reads as ranged.
+  // Entry point: a unit type may name an explicit `attackFx` (e.g. the Zapper's lightning);
+  // otherwise the effect is picked from reach (in Tiles) — melee Units sit at range 1.5, so
+  // anything reaching ~2+ Tiles reads as a ranged bolt and the rest as a melee slash.
   show(attacker, target, def) {
     const color = FACTION_COLOR[attacker.faction] ?? 0xffffff;
     const tx = target.x, ty = this._bodyY(target);
-    if ((def?.range || 0) >= 2) {
+    if (def?.attackFx === 'lightning') {
+      // Always yellow — a lightning arc reads as electricity regardless of side.
+      this._lightning(attacker.x, this._bodyY(attacker), tx, ty, 0xffe24d);
+    } else if ((def?.range || 0) >= 2) {
       this._laser(attacker.x, this._bodyY(attacker), tx, ty, color);
     } else {
       this._slash(tx, ty, color);
     }
+  }
+
+  // A jagged lightning arc from attacker to target that crackles (re-jittered each frame) and
+  // fades over ~180ms, then sparks on impact. Same soft-glow + white-core look as the laser.
+  _lightning(x1, y1, x2, y2, color) {
+    const scene = this.scene;
+    const g = scene.add.graphics().setDepth(EFFECT_DEPTH);
+    const dx = x2 - x1, dy = y2 - y1;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len;
+    const px = -uy, py = ux;                    // perpendicular, to kink the bolt off-axis
+    const segs = Math.max(4, Math.round(len / 16));
+    const stroke = (pts) => {
+      g.beginPath();
+      g.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) g.lineTo(pts[i].x, pts[i].y);
+      g.strokePath();
+    };
+    const s = { p: 0 };
+    scene.tweens.add({
+      targets: s,
+      p: 1,
+      duration: 180,
+      ease: 'Linear',
+      onUpdate: () => {
+        const alpha = Math.max(0.15, 1 - s.p);
+        const amp = 8 * (1 - s.p * 0.5);        // settles as it fades
+        const pts = [];
+        for (let i = 0; i <= segs; i++) {
+          const t = i / segs;
+          const j = (i === 0 || i === segs) ? 0 : (Math.random() * 2 - 1) * amp;
+          pts.push({ x: x1 + ux * len * t + px * j, y: y1 + uy * len * t + py * j });
+        }
+        g.clear();
+        g.lineStyle(6, color, alpha * 0.25); stroke(pts);   // soft glow
+        g.lineStyle(2, 0xffffff, alpha);      stroke(pts);   // bright core
+      },
+      onComplete: () => { g.destroy(); this._impact(x2, y2, color); },
+    });
   }
 
   // A bright bolt that travels source→target, trailing a soft glow, then flashes on arrival.
