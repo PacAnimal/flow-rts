@@ -16,6 +16,7 @@ import { flowLibrary } from '../flow/library.js';
 import { openAssignOverlay } from '../flow/assign.js';
 import { registerPositionPicker } from '../flow/positionPicker.js';
 import { startRun, tickRun } from '../flow/runtime.js';
+import { getNodeKind } from '../flow/nodeKinds.js';
 import { MovementSystem } from '../movement.js';
 import { getResource, RESOURCES } from '../resources.js';
 import { DECORATIONS } from '../decorations.js';
@@ -171,6 +172,13 @@ export class MapScene extends Phaser.Scene {
     };
 
     this._scenarioState = { time: 0, next: 0 }; // wave-clock cursor (docs/adr/0014)
+
+    // Live inspector: while the sim is running, clicking a Runner opens its Flow in the editor as
+    // a docked, read-only panel with the running node highlighted (see _inspectRunner /
+    // _syncInspector). While paused, a click assigns a Flow instead (the authoring gesture).
+    this._selectedRunner = null;
+    this._inspectFlowId = null;
+
     this._buildStartButton();
     this._buildMaterialsPanel();
     this._buildBanner();
@@ -180,21 +188,27 @@ export class MapScene extends Phaser.Scene {
   // its goal), then integrate movement for all Units at once (so idle Units also get shoved),
   // then sync sprites. Paused ⇒ nothing ticks and nothing moves.
   update(_time, delta) {
-    if (!this.units || !this._running || this._over) return;
+    if (!this.units) return;
 
-    // Tick every Runner's Run — Units and Buildings alike (CONTEXT.md Runner). Buildings run
-    // building-scoped Flows (Train); Units run movement/gather/combat Flows.
-    for (const runner of this._runners()) this._tickRunner(runner, delta);
+    if (this._running && !this._over) {
+      // Tick every Runner's Run — Units and Buildings alike (CONTEXT.md Runner). Buildings run
+      // building-scoped Flows (Train); Units run movement/gather/combat Flows.
+      for (const runner of this._runners()) this._tickRunner(runner, delta);
 
-    // Combat resolves before movement so an engaging Unit holds its ground (docs/adr/0012),
-    // then the movement pass integrates positions, then the Scenario advances its wave clock.
-    this._combat.update(this.units, delta);
-    this._movement.update(this.units, delta);
-    this._updateScenario(delta);
+      // Combat resolves before movement so an engaging Unit holds its ground (docs/adr/0012),
+      // then the movement pass integrates positions, then the Scenario advances its wave clock.
+      this._combat.update(this.units, delta);
+      this._movement.update(this.units, delta);
+      this._updateScenario(delta);
 
-    for (const unit of this.units) this._placeUnit(unit);
-    for (const b of this.buildings) b.syncHealthBar();
-    this._checkObjective();
+      for (const unit of this.units) this._placeUnit(unit);
+      for (const b of this.buildings) b.syncHealthBar();
+      this._checkObjective();
+    }
+
+    // Push the inspected Runner's live cursor to the editor every frame — also while paused, so
+    // a freshly-clicked Runner highlights at once even before START.
+    this._syncInspector();
   }
 
   // Every Runner currently on the map (Units + Buildings). Enemy Units are in `this.units`.
@@ -232,6 +246,9 @@ export class MapScene extends Phaser.Scene {
     runner.sprite?.destroy();
     if (runner.labelText) runner.labelText.destroy();
     runner.run = null;
+
+    // If we were inspecting this Runner, close the panel — there's nothing left to watch.
+    if (runner === this._selectedRunner) this._stopInspecting();
 
     if (this.units.includes(runner)) {
       this.units = this.units.filter((u) => u !== runner);
@@ -1179,6 +1196,7 @@ void main(void){
     if (this._over) return; // level decided — START/PAUSE is inert
     this._running = running;
     if (running) for (const r of this._runners()) if (!r.run) this._startRun(r);
+    else this._stopInspecting(); // pausing returns to the authoring/assign gesture
     this._updateStartBtn();
   }
 
@@ -1195,6 +1213,80 @@ void main(void){
     if (!this._startBtn) return;
     this._startBtn.textContent = this._running ? '❚❚ Pause' : '▶ Start';
     this._startBtn.classList.toggle('running', this._running);
+  }
+
+  // ── live inspector ──────────────────────────────────────────────────────────
+
+  // The shared Flow editor instance (set on the game registry in main.js), or null pre-mount.
+  _editor() { return this.registry.get('flowEditor') || null; }
+
+  // Open the editor as a live read-only inspector of `runner`'s Flow, docked beside the still-live
+  // map. The Run may not exist yet (just-assigned) — fall back to the Assignment so the Flow still
+  // shows. Closing the panel (its ✕) clears the selection so the per-frame sync stops.
+  _inspectRunner(runner) {
+    const editor = this._editor();
+    if (!editor) return;
+    const flowId = runner.run?.flowId ?? runner.assignedFlowId ?? null;
+    const model = this._resolveFlow(flowId);
+    if (!model) return; // no Flow to show (unassigned) — leave the current selection/panel as-is
+    this._selectedRunner = runner;
+    this._inspectFlowId = flowId;
+    editor.inspect(model, this._inspectTitle(runner), {
+      readOnly: true,
+      onClose: () => this._stopInspecting(),
+    });
+    editor.show();
+  }
+
+  _stopInspecting() {
+    this._selectedRunner = null;
+    this._inspectFlowId = null;
+    this._editor()?.stopInspecting();
+  }
+
+  _inspectTitle(runner) {
+    return `${runner.label || 'Runner'}  ·  ${runner.faction}`;
+  }
+
+  // Per-frame: keep the editor's highlight on the inspected Runner's current node, swapping the
+  // shown Flow if its Assignment changed (e.g. a re-assign restarted the Run on a new Flow).
+  _syncInspector() {
+    if (!this._selectedRunner) return;
+    const editor = this._editor();
+    if (!editor) return;
+    const r = this._selectedRunner;
+    const flowId = r.run?.flowId ?? r.assignedFlowId ?? null;
+    if (flowId !== this._inspectFlowId) {
+      this._inspectFlowId = flowId;
+      const model = this._resolveFlow(flowId);
+      if (model) {
+        editor.inspect(model, this._inspectTitle(r), {
+          readOnly: true,
+          onClose: () => this._stopInspecting(),
+        });
+      }
+    }
+    editor.setActiveNode(r.run?.current ?? null, r.run?.status ?? 'idle', this._runDetail(r));
+  }
+
+  // A human-readable status line for the inspected Runner's Run: the active node's title plus its
+  // elapsed/duration for timed nodes (Wait/Gather/Hold/Train all accumulate `elapsed` in scratch).
+  _runDetail(r) {
+    const run = r.run;
+    if (!run) return 'idle — paused or no Flow assigned';
+    if (run.status === 'halted') return 'halted — current node was removed by an edit';
+    if (run.status === 'idle') return 'idle — Flow finished';
+    const node = this._resolveFlow(run.flowId)?.getNode(run.current);
+    if (!node) return run.status;
+    let title;
+    try { title = getNodeKind(node.kind).title; } catch { title = node.kind; }
+    const ms = run.state?.elapsed;
+    if (ms != null) {
+      const dur = node.params?.duration;
+      return dur ? `▶ ${title}  ${(ms / 1000).toFixed(1)} / ${dur.toFixed(1)}s`
+                 : `▶ ${title}  ${(ms / 1000).toFixed(1)}s`;
+    }
+    return `▶ ${title}`;
   }
 
   // Top-left panel showing the player's Stockpile — one entry per known Resource.
@@ -1267,7 +1359,10 @@ void main(void){
     // The Flow editor is a DOM overlay (docs/adr/0001). While it's open, disable all map pointer
     // input — Phaser's window-level listeners would otherwise let clicks fall through the overlay
     // onto Units/Buildings behind it. The editor emits this event from _applyVisibility.
-    window.addEventListener('flow-editor-visibility', (e) => { this.input.enabled = !e.detail.open; });
+    // The full-screen editor blocks map input; the docked inspector (blocking:false) does not, so
+    // the map stays clickable to switch which Runner is inspected (docs/adr/0001).
+    window.addEventListener('flow-editor-visibility',
+      (e) => { this.input.enabled = !(e.detail.open && e.detail.blocking); });
 
     let drag = null;
     // Tracked separately from `drag` so it survives pointerup (which clears `drag`) and is
@@ -1310,6 +1405,14 @@ void main(void){
     // Flows. Enemy Units are not the player's to command.
     this.input.on('gameobjectup', (_p, obj) => {
       if (this._pick || this._dragMoved) return;
+      // While running, a click inspects the Runner's live Flow (either Faction); while paused it
+      // assigns a Flow (player Runners only). The docked inspector leaves the map clickable, so a
+      // click on another Runner just switches who is inspected.
+      if (this._running) {
+        const runner = (obj.getData && (obj.getData('unit') || obj.getData('building'))) || null;
+        if (runner) this._inspectRunner(runner);
+        return;
+      }
       const unit = obj.getData && obj.getData('unit');
       if (unit && unit.faction === FACTION.PLAYER) {
         openAssignOverlay(unit, flowLibrary, 'unit', (u) => {

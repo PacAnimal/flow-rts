@@ -107,6 +107,25 @@
 }
 .flow-editor.hidden { display: none; }
 
+/* Docked inspector: a right-side panel instead of a full-screen overlay, so the map stays
+   visible and clickable. The Library/palette are hidden; the canvas fills the panel. */
+.flow-editor.docked {
+  inset: auto 0 0 auto;       /* pin to the right edge, full height */
+  top: 0;
+  width: min(420px, 42vw);
+  border-left: 1px solid #2c3a43;
+  background: rgba(16, 22, 27, 0.96);
+  box-shadow: -10px 0 30px rgba(0, 0, 0, 0.45);
+}
+.flow-editor.docked .flow-library { display: none; }
+
+/* Node layer — scaled by the inspector's auto-fit; identity in the full editor. */
+.flow-node-layer {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+}
+
 /* Library column */
 .flow-library {
   width: 230px;
@@ -287,6 +306,59 @@
 .flow-node.category-action { border-top-color: #3a7bd5; }
 .flow-node.category-control { border-top-color: #9b6cd5; }
 .flow-node.dragging { box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55); z-index: 5; }
+
+/* Debug-inspect live cursor: the node a Runner's Run currently sits on. running = active
+   (pulsing green); idle = Flow finished here; halted = the current node was deleted under it. */
+.flow-node.cursor-running {
+  outline: 3px solid #46e08a;
+  outline-offset: 2px;
+  animation: cursor-pulse 1.1s ease-in-out infinite;
+}
+.flow-node.cursor-idle { outline: 3px solid #9fb4c0; outline-offset: 2px; }
+.flow-node.cursor-halted { outline: 3px solid #e0533c; outline-offset: 2px; }
+@keyframes cursor-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(70, 224, 138, 0.30), 0 6px 18px rgba(0, 0, 0, 0.4); }
+  50%      { box-shadow: 0 0 0 7px rgba(70, 224, 138, 0.08), 0 6px 18px rgba(0, 0, 0, 0.4); }
+}
+
+/* Read-only inspect mode: hide authoring affordances and freeze the canvas (no node/wire/param
+   edits). The Library column stays usable so clicking a Flow returns to authoring. */
+.flow-editor.read-only .flow-palette { display: none; }
+.flow-editor.read-only .node-delete { display: none; }
+.flow-editor.read-only .node-params { pointer-events: none; opacity: 0.7; }
+.flow-editor.read-only .wire-hit { pointer-events: none; }
+.flow-editor.read-only .node-header,
+.flow-editor.read-only .port { cursor: default; }
+
+/* Inspect header — Runner name + live Run status, pinned to the top of the docked panel. */
+.flow-inspect-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 12px 14px;
+  background: linear-gradient(#1b252c, rgba(27, 37, 44, 0.85));
+  border-bottom: 1px solid #2c3a43;
+  font: 600 13px/1.2 system-ui, sans-serif;
+  color: #cfe3ef;
+}
+.flow-inspect-bar.hidden { display: none; }
+.inspect-label { font-weight: 700; white-space: nowrap; }
+.inspect-detail { flex: 1 1 auto; color: #8fd6a8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inspect-close {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  color: #cdd9e0;
+  background: #2f4250;
+  border: 1px solid #45606e;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.inspect-close:hover { background: #3a5060; color: #fff; }
 
 /* Drag ghost: the preview that follows the pointer while dragging a palette node onto the
    canvas (_startPaletteDrag). Fixed + viewport coords (matches clientX/Y) and above the editor

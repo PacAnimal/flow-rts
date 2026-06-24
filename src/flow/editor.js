@@ -21,6 +21,16 @@ export class FlowEditor {
     this.visible = false;
     this.nodeEls = new Map(); // nodeId -> node element
     this.portEls = new Map(); // `${nodeId}:${portId}` -> port dot element
+    // Inspect state (driven by MapScene): when inspecting, the editor renders a Runner's live Flow
+    // read-only in a docked side panel and highlights the node its cursor sits on.
+    // _activeNodeId/_activeStatus track the highlighted node so setActiveNode can diff and touch
+    // the DOM only on change. `docked` switches the layout from full-screen overlay to side panel.
+    this._inspecting = false;
+    this.docked = false;
+    this.readOnly = false;
+    this._onClose = null;
+    this._activeNodeId = null;
+    this._activeStatus = null;
     this._build();
     // Reactive loop: structural edits go through commit(), which bumps this store; the
     // subscription re-renders. subscribe fires once now (model is null → _render no-ops).
@@ -35,7 +45,13 @@ export class FlowEditor {
     return this;
   }
 
-  toggle() { this.visible ? this.hide() : this.show(); }
+  // The toggle button / `F` key is the authoring entry point: opening this way always lands on a
+  // Library Flow, leaving any docked inspection behind.
+  toggle() {
+    if (this.visible) { this.hide(); return; }
+    this._exitInspect();
+    this.show();
+  }
 
   show() {
     this.visible = true;
@@ -43,6 +59,8 @@ export class FlowEditor {
     // getBoundingClientRect, which returns zeros while the editor is display:none —
     // that left restored Connections drawn as degenerate (0,0)→(0,0) paths after reload.
     this._applyVisibility();
+    // Inspecting: the model is supplied by inspect(), not the Library — just re-measure wires.
+    if (this._inspecting) { this._render(); return; }
     // Ensure there's a Flow to edit.
     if (!this.library.list().length) { this.library.create(); this.library.save(); }
     if (!this.currentId || !this.library.get(this.currentId)) {
@@ -60,7 +78,12 @@ export class FlowEditor {
     // Suppress map input while the overlay is open. Covering the canvas isn't enough on its own:
     // Phaser also listens on `window` (input.windowEvents), so clicks on the overlay still bubble
     // up and hit-test Units/Buildings behind it. The scene flips this.input.enabled on this event.
-    window.dispatchEvent(new CustomEvent('flow-editor-visibility', { detail: { open: this.visible } }));
+    // The docked inspector is the exception: it covers only a side strip, so the map stays live
+    // (blocking:false) — clicking a Runner there switches who is inspected. Its own pointer events
+    // are swallowed on `root` (see _build) so a click on the panel never falls through to the map.
+    window.dispatchEvent(new CustomEvent('flow-editor-visibility', {
+      detail: { open: this.visible, blocking: this.visible && !this.docked },
+    }));
   }
 
   // ── DOM scaffolding ────────────────────────────────────────────────────────
@@ -70,6 +93,11 @@ export class FlowEditor {
     this.toggleBtn.addEventListener('click', () => this.toggle());
 
     this.root = el('div', 'flow-editor hidden');
+    // While docked (map left clickable), stop the panel's own pointer events from bubbling to
+    // window, where Phaser would otherwise hit-test a Runner sitting behind the panel.
+    for (const ev of ['pointerdown', 'pointerup']) {
+      this.root.addEventListener(ev, (e) => { if (this.docked) e.stopPropagation(); });
+    }
 
     // Library column — the collection of named Flows.
     const libPanel = el('div', 'flow-library');
@@ -105,8 +133,25 @@ export class FlowEditor {
     this.tempPath.classList.add('wire', 'wire-temp');
     this.svg.appendChild(this.wireGroup);
     this.svg.appendChild(this.tempPath);
+    // Nodes live in their own layer so the inspector can scale it to fit a flow into the docked
+    // panel (auto-fit). The wire SVG stays a direct, unscaled child of the canvas, so wires are
+    // drawn in real on-screen coordinates (measured via getBoundingClientRect) and never get
+    // double-transformed by the layer's scale. In the full editor the layer scale stays identity.
+    this.nodeLayer = el('div', 'flow-node-layer');
     this.canvasEl.appendChild(this.svg);
+    this.canvasEl.appendChild(this.nodeLayer);
     this.canvasEl.appendChild(this.flowName);
+
+    // Inspect header — shown only in the docked inspector. Names the inspected Runner, shows its
+    // live Run status + active node (e.g. "▶ Wait  1.3 / 3.0s"), and a button to close the panel.
+    // No Runner stepper: the panel leaves the map clickable, so clicking another Runner switches.
+    this.inspectBar = el('div', 'flow-inspect-bar hidden');
+    this.inspectLabel = el('span', 'inspect-label', '');
+    this.inspectDetail = el('span', 'inspect-detail', '');
+    this.inspectClose = el('button', 'inspect-close', '✕');
+    this.inspectClose.addEventListener('click', () => this._onClose?.());
+    this.inspectBar.append(this.inspectLabel, this.inspectDetail, this.inspectClose);
+    this.canvasEl.appendChild(this.inspectBar);
 
     this.root.appendChild(libPanel);
     this.root.appendChild(palette);
@@ -177,11 +222,74 @@ export class FlowEditor {
   setFlow(id) {
     const entry = this.library.get(id);
     if (!entry) return;
+    // Selecting a Library Flow is an authoring action — leave any debug-inspect mode.
+    this._exitInspect();
     this.currentId = id;
     this.model = entry.model;
     this.flowName.textContent = `${entry.name}  ·  ${entry.model.targetKind} flow`;
     this._renderPalette();
     this._render();
+  }
+
+  // ── debug inspect (driven by MapScene) ─────────────────────────────────────
+
+  // Render an arbitrary FlowModel read-only and highlight its Runner's live cursor. Unlike
+  // setFlow, the model is supplied directly (Enemy Flows live outside the Library, ADR-0011).
+  // `nav` (optional) wires the prev/next Runner stepper. Repeated calls swap the inspected Flow.
+  inspect(model, title, { readOnly = true, onClose = null } = {}) {
+    this._inspecting = true;
+    this.docked = true;
+    this.readOnly = readOnly;
+    this._onClose = onClose;
+    this.currentId = null;
+    this.model = model;
+    this._clearActiveNode();
+    this.root.classList.toggle('read-only', readOnly);
+    this.root.classList.add('docked');
+    this.flowName.textContent = '';
+    this.inspectLabel.textContent = title;
+    this.inspectDetail.textContent = '';
+    this.inspectBar.classList.remove('hidden');
+    this._renderPalette();
+    this._render();
+  }
+
+  // Close the docked inspector entirely (its ✕, or the scene clearing the selection).
+  stopInspecting() { this._exitInspect(); this.hide(); }
+
+  _exitInspect() {
+    this._onClose = null;
+    this.docked = false;
+    this.root.classList.remove('docked');
+    this.inspectBar.classList.add('hidden');
+    this.nodeLayer.style.transform = '';
+    if (this._inspecting) this._clearActiveNode();
+    this._inspecting = false;
+    this.readOnly = false;
+    this.root.classList.remove('read-only');
+  }
+
+  // Move the live-cursor highlight to `nodeId` and update the status detail line. Cheap to call
+  // every frame: the node class is touched only when the node or status changes; the detail text
+  // only when it changes. A no-op unless inspecting, so stray calls after leaving are harmless.
+  setActiveNode(nodeId, status, detail = '') {
+    if (!this._inspecting) return;
+    if (nodeId !== this._activeNodeId || status !== this._activeStatus) {
+      this._clearActiveNode();
+      this._activeNodeId = nodeId;
+      this._activeStatus = status;
+      if (nodeId && status) this.nodeEls.get(nodeId)?.classList.add(`cursor-${status}`);
+    }
+    if (this.inspectDetail.textContent !== detail) this.inspectDetail.textContent = detail;
+  }
+
+  _clearActiveNode() {
+    if (this._activeNodeId) {
+      this.nodeEls.get(this._activeNodeId)
+        ?.classList.remove('cursor-running', 'cursor-idle', 'cursor-halted');
+    }
+    this._activeNodeId = null;
+    this._activeStatus = null;
   }
 
   // The single mutation path: apply a change to the model, persist it, then bump the store
@@ -212,8 +320,40 @@ export class FlowEditor {
       if (!nodeEl) nodeEl = this._addNodeEl(node);
       nodeEl.style.transform = `translate(${node.x}px, ${node.y}px)`;
     }
-    this._renderWires();
+    this._fitDocked();   // scale the node layer to fit the panel (docked inspector only)
+    this._renderWires(); // measured after the fit, so wires track the scaled node positions
     this._renderLibrary();
+  }
+
+  // Auto-fit: in the docked inspector, scale + offset the node layer so the whole Flow fits the
+  // panel (clamped to ≤1× — never upscale). Measured from model coords + each node's laid-out
+  // size, with the layer transform reset first so the measurement isn't itself scaled. In the
+  // full editor (not docked) the layer keeps identity, so authoring positions are untouched.
+  _fitDocked() {
+    if (!this.docked || !this.model || !this.nodeEls.size) {
+      this.nodeLayer.style.transform = '';
+      return;
+    }
+    this.nodeLayer.style.transform = 'none';
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [id, nodeEl] of this.nodeEls) {
+      const n = this.model.getNode(id);
+      if (!n) continue;
+      minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x + nodeEl.offsetWidth);
+      maxY = Math.max(maxY, n.y + nodeEl.offsetHeight);
+    }
+    if (!Number.isFinite(minX)) { this.nodeLayer.style.transform = ''; return; }
+    const PAD = 24, TOP = 52; // TOP clears the inspect header
+    const availW = this.canvasEl.clientWidth - PAD * 2;
+    const availH = this.canvasEl.clientHeight - TOP - PAD;
+    // Not laid out yet (e.g. rendered while still display:none) — leave identity; show() re-renders.
+    if (availW <= 0 || availH <= 0) { this.nodeLayer.style.transform = ''; return; }
+    const spanX = Math.max(maxX - minX, 1), spanY = Math.max(maxY - minY, 1);
+    const s = Math.min(availW / spanX, availH / spanY, 1);
+    this.nodeLayer.style.transformOrigin = '0 0';
+    this.nodeLayer.style.transform =
+      `translate(${PAD - minX * s}px, ${TOP + PAD - minY * s}px) scale(${s})`;
   }
 
   // ── geometry helpers ─────────────────────────────────────────────────────
@@ -273,7 +413,7 @@ export class FlowEditor {
       nodeEl.appendChild(section);
     }
 
-    this.canvasEl.appendChild(nodeEl);
+    this.nodeLayer.appendChild(nodeEl);
     this.nodeEls.set(node.id, nodeEl);
     return nodeEl;
   }
@@ -419,6 +559,7 @@ export class FlowEditor {
   }
 
   _removeNode(id) {
+    if (this.readOnly) return;
     this.commit((m) => m.removeNode(id));
   }
 
@@ -446,6 +587,7 @@ export class FlowEditor {
   // ── interactions ───────────────────────────────────────────────────────────
 
   _startPaletteDrag(e, kind) {
+    if (this.readOnly) return;
     e.preventDefault();
     const ghost = el('div', `flow-node category-${getNodeKind(kind).category} flow-ghost`);
     ghost.appendChild(el('div', 'node-header', getNodeKind(kind).title));
@@ -471,6 +613,7 @@ export class FlowEditor {
   }
 
   _startNodeDrag(e, nodeId) {
+    if (this.readOnly) return;
     e.preventDefault();
     const node = this.model.getNode(nodeId);
     const start = this._canvasPoint(e.clientX, e.clientY);
@@ -497,6 +640,7 @@ export class FlowEditor {
   }
 
   _startWireDrag(e, nodeId, portId, dir) {
+    if (this.readOnly) return;
     e.preventDefault();
     e.stopPropagation();
     const source = { node: nodeId, port: portId, dir };
