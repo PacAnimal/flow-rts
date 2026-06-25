@@ -1693,6 +1693,8 @@ void main(void){
       if (!drag) return;
       if (Math.abs(p.x - drag.ox) + Math.abs(p.y - drag.oy) > 3) this._dragMoved = true;
       cam.setScroll(drag.sx - (p.x - drag.ox), drag.sy - (p.y - drag.oy));
+      // clamp immediately so update() reads the real scroll before preRender() runs (docs/adr/0001)
+      if (cam.useBounds) { cam.scrollX = cam.clampX(cam.scrollX); cam.scrollY = cam.clampY(cam.scrollY); }
     });
     const endDrag = () => {
       // A click (no drag) in pick mode commits the hovered Tile.
