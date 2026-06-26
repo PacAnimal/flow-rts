@@ -11,6 +11,7 @@ import { HeavyChojin } from '../entities/HeavyChojin.js';
 import { CommandCenter } from '../entities/CommandCenter.js';
 import { Barracks } from '../entities/Barracks.js';
 import { Factory } from '../entities/Factory.js';
+import { ConstructionSite } from '../entities/ConstructionSite.js';
 import { TILE, EXTRUDE, UNIT_CARRY_CAPACITY } from '../constants.js';
 import { flowLibrary } from '../flow/library.js';
 import { openAssignOverlay } from '../flow/assign.js';
@@ -31,6 +32,8 @@ const MAP_H = 90;
 
 // Unit type id → class, for spawning produced/Enemy Units by type (docs/adr/0013, 0014).
 const UNIT_CLASS = { worker: Worker, marine: Marine, zapper: Zapper, reaper: Reaper, tank: Tank, mech: Mech, chojin: Chojin, 'heavy-chojin': HeavyChojin };
+// Building type key → entity class, for raising a finished Building from a Construction Site (docs/adr/0018).
+const BUILDING_CLASS = { command_center: CommandCenter, barracks: Barracks, factory: Factory };
 
 // Label styles for units: name in light grey, running flow in electric blue.
 const LABEL_NAME_STYLE = {
@@ -116,12 +119,16 @@ export class MapScene extends Phaser.Scene {
     this._depositByTile = new Map(); // `${tx},${ty}` → Deposit
 
     // The player's Stockpile (docs/adr/0008): Resource id → amount, grown when a Worker delivers
-    // its Cargo at the command center. Shown in the materials panel.
-    this._stockpile = {};
+    // its Cargo at the command center. Shown in the materials panel. Seeded with starting alloys so
+    // the player can afford an early Build before the first delivery lands (docs/adr/0018).
+    this._stockpile = { alloys: 200 };
 
     // Buildings are Runners too (CONTEXT.md): they hold Assignments and Runs and are ticked
     // alongside Units. Enemy Flows are data-authored and live here, out of the Library (ADR-0011).
     this.buildings = [];
+    // Construction Sites (docs/adr/0018): placed-but-unfinished Buildings raised by Worker crews.
+    // Their own entities (not Buildings, not Runners), but they occupy footprints and take damage.
+    this._sites = [];
     this._enemyFlows = new Map(); // flowId → FlowModel for spawned Enemies
     this._over = false;           // set once the Objective resolves (win/lose)
     this._enemySeq = 0;
@@ -196,6 +203,10 @@ export class MapScene extends Phaser.Scene {
       roamDest: (unit) => this._roamDest(unit),
       // Production (docs/adr/0013): a building-scoped Action ticked on a Building Runner.
       train: (building, params, state, dt) => this._train(building, params, state, dt),
+      // Construction (docs/adr/0018): Build places a Site; Construct claims a build slot and raises it.
+      build: (building, params) => this._build(building, params),
+      claimBuildSlot: (unit) => this._claimBuildSlot(unit),
+      construct: (unit, site, dt) => this._construct(unit, site, dt),
     };
 
     this._scenarioState = { time: 0, next: 0 }; // wave-clock cursor (docs/adr/0014)
@@ -230,6 +241,7 @@ export class MapScene extends Phaser.Scene {
 
       for (const unit of this.units) this._placeUnit(unit);
       for (const b of this.buildings) { b.syncHealthBar(); this._drawBuildingProgress(b); }
+      for (const s of this._sites) { s.syncHealthBar(); this._drawSiteProgress(s); } // construction (docs/adr/0018)
       this._checkObjective();
     }
 
@@ -274,7 +286,9 @@ export class MapScene extends Phaser.Scene {
     target.syncHealthBar();
     if (died) {
       this._log(`${target.label} is destroyed`);
-      this._destroyRunner(target);
+      // A Construction Site isn't a Runner (docs/adr/0018): tear it down its own way.
+      if (this._sites.includes(target)) this._destroySite(target);
+      else this._destroyRunner(target);
     }
   }
 
@@ -286,6 +300,7 @@ export class MapScene extends Phaser.Scene {
     if (runner.labelNameText) runner.labelNameText.destroy();
     if (runner.labelFlowText) runner.labelFlowText.destroy();
     this._releaseClaim(runner); // a destroyed Worker frees its Deposit (docs/adr/0017)
+    this._releaseBuildSlot(runner); // and its build slot at a Construction Site (docs/adr/0018)
     runner.run = null;
 
     // If we were inspecting this Runner, close the panel — there's nothing left to watch.
@@ -319,6 +334,15 @@ export class MapScene extends Phaser.Scene {
           x: (b.tx + b.tileW * 0.5) * TILE,
           y: (b.ty + b.tileH * 0.5) * TILE,
           radius: b.tileW * TILE * 0.5,
+        });
+    // Construction Sites are destructible too (docs/adr/0018): an Enemy can raze a half-built structure.
+    for (const s of this._sites)
+      if (s.faction !== unit.faction && s.health > 0)
+        out.push({
+          entity: s,
+          x: (s.tx + s.tileW * 0.5) * TILE,
+          y: (s.ty + s.tileH * 0.5) * TILE,
+          radius: s.tileW * TILE * 0.5,
         });
     return out;
   }
@@ -411,6 +435,156 @@ export class MapScene extends Phaser.Scene {
     unit.labelFlowText = this.add.text(unit.x, hbTopY0 - 2, '', LABEL_FLOW_STYLE).setOrigin(0.5, 1).setDepth(1e6).setVisible(false);
     this.units.push(unit);
     return unit;
+  }
+
+  // ── construction (docs/adr/0018) ─────────────────────────────────────────────
+
+  // Build executor backend: place a Construction Site of the chosen type at the chosen Footprint,
+  // then let Build advance. Unlike Train (which blocks until affordable), an unaffordable or
+  // blocked Build is a NO-OP that still advances — the Command Center isn't held up (docs/adr/0018).
+  _build(building, params) {
+    const def = getBuildingType(params.buildingType);
+    if (!def || !def.buildable) return;          // nothing / non-buildable selected — no-op
+    const anchor = params.destination;
+    if (!anchor) return;                          // unset Location — no-op (ADR-0004)
+    if (!this._footprintBuildable(anchor.x, anchor.y, def.tileW, def.tileH)) {
+      this._log(`Build ${def.label}: footprint at (${anchor.x}, ${anchor.y}) is blocked`);
+      return;                                     // blocked since authoring — no-op + advance
+    }
+    if (!this._canAfford(def.cost)) {
+      this._log(`Build ${def.label}: not enough resources`);
+      return;                                     // can't afford — no-op + advance (not blocking)
+    }
+    this._spend(def.cost);
+    this._placeSite(def, anchor.x, anchor.y, params.assignFlow || null, building.faction);
+  }
+
+  // Place a Construction Site: block its Footprint (docs/adr/0009) and register it for ticking,
+  // damage, and rendering. It carries the Build node's optional assignFlow, applied to the finished
+  // Building when construction completes (docs/adr/0018).
+  _placeSite(def, tx, ty, assignFlowId, faction) {
+    this._occupy(tx, ty, def.tileW, def.tileH, 'construction', true);
+    const site = new ConstructionSite(this, tx, ty, def, faction);
+    site.label = `${def.label} (site)`;
+    site.assignFlowId = assignFlowId && flowLibrary.get(assignFlowId) ? assignFlowId : null;
+    this._sites.push(site);
+    site.syncHealthBar();
+    this._log(`Construction started: ${def.label} at (${tx}, ${ty})`);
+  }
+
+  // Construct executor backend: claim one of the nearest reachable Site's ≤4 build slots, mirroring
+  // _claimDeposit (docs/adr/0017). Reach-limited like Gather — only Sites within CLAIM_RADIUS of
+  // where the Worker stands. Returns an opaque handle + a Tile to stand on beside the Footprint,
+  // or null when no Site in reach needs builders (so the Worker waits in place).
+  _claimBuildSlot(unit) {
+    const { x: ux, y: uy } = this._unitTile(unit);
+    // Already holding a slot on a live Site? Keep it (refresh the standing Tile).
+    if (unit._buildSlot && this._sites.includes(unit._buildSlot)) {
+      const site = unit._buildSlot;
+      return { handle: site, dest: this._standingTileBesideFootprint(site, ux, uy) || { x: ux, y: uy } };
+    }
+    let best = null, bestStand = null, bestD = Infinity;
+    for (const site of this._sites) {
+      if (site.faction !== unit.faction) continue;                  // build only your own
+      if (site.builders.size >= 4 && !site.builders.has(unit)) continue; // full — four builders max
+      // Chebyshev distance from the Worker to the Footprint rectangle, in Tiles (rally reach).
+      const dx = Math.max(site.tx - ux, ux - (site.tx + site.tileW - 1), 0);
+      const dy = Math.max(site.ty - uy, uy - (site.ty + site.tileH - 1), 0);
+      if (Math.max(dx, dy) > CLAIM_RADIUS) continue;                // out of reach — ignore
+      const d = dx * dx + dy * dy;
+      if (d >= bestD) continue;
+      const stand = this._standingTileBesideFootprint(site, ux, uy);
+      if (!stand) continue;                                         // hemmed in — unreachable
+      best = site; bestStand = stand; bestD = d;
+    }
+    if (!best) return null;                                         // none in reach — wait in place
+    this._releaseBuildSlot(unit);                                   // drop any prior slot
+    best.builders.add(unit);
+    unit._buildSlot = best;
+    return { handle: best, dest: bestStand };
+  }
+
+  // A free Walkable Tile on the ring just outside a Site's Footprint, nearest to (fromX,fromY) —
+  // where a Worker stands to build. null when the Footprint is fully hemmed in.
+  _standingTileBesideFootprint(site, fromX, fromY) {
+    let best = null, bestD = Infinity;
+    for (let y = site.ty - 1; y <= site.ty + site.tileH; y++)
+      for (let x = site.tx - 1; x <= site.tx + site.tileW; x++) {
+        const inside = x >= site.tx && x < site.tx + site.tileW && y >= site.ty && y < site.ty + site.tileH;
+        if (inside || !this.walkable(x, y)) continue;
+        const d = (x - fromX) ** 2 + (y - fromY) ** 2;
+        if (d < bestD) { best = { x, y }; bestD = d; }
+      }
+    return best;
+  }
+
+  // Add one builder-tick of work to a Site (docs/adr/0018). Each arrived builder calls this once a
+  // frame, so N builders accrue N×dt — the linear "more Workers ⇒ faster" rule, capped at 4 by the
+  // slot limit. Returns true (advance the Worker + free its slot) when the Site completes or has
+  // already gone (finished or razed under it).
+  _construct(unit, site, dt) {
+    if (!this._sites.includes(site)) { this._releaseBuildSlot(unit); return true; }
+    site.buildProgress += dt;
+    if (site.buildProgress < site.buildDuration) return false;     // still building
+    this._completeSite(site);
+    return true;
+  }
+
+  // Construction finished: free the Site, raise the real Building of that type in its place, and
+  // hand it the Build node's chosen Flow so it is born running (docs/adr/0018).
+  _completeSite(site) {
+    this._sites = this._sites.filter((s) => s !== site);
+    this._clearSite(site);
+    const Cls = BUILDING_CLASS[site.type];
+    if (!Cls) return;
+    this._occupy(site.tx, site.ty, site.tileW, site.tileH, 'building', true);
+    const b = new Cls(this, site.tx, site.ty);
+    this._registerBuilding(b, getBuildingType(site.type)?.label || site.type, site.assignFlowId);
+    this._log(`${b.label} construction complete`);
+  }
+
+  // A Site razed mid-build (docs/adr/0018): free its Footprint and tear it down. The spent cost is
+  // gone — no refund (CONTEXT.md Construction Site).
+  _destroySite(site) {
+    this._sites = this._sites.filter((s) => s !== site);
+    for (let dy = 0; dy < site.tileH; dy++)
+      for (let dx = 0; dx < site.tileW; dx++)
+        this._occupied.delete(`${site.tx + dx},${site.ty + dy}`);
+    this._clearSite(site);
+  }
+
+  // Shared teardown: release every attached builder's slot and destroy the Site's sprites/bars.
+  // _destroySite frees the Footprint; _completeSite re-occupies it as a Building, so freeing the
+  // occupancy lives in the callers, not here.
+  _clearSite(site) {
+    for (const u of site.builders) u._buildSlot = null;
+    site.builders.clear();
+    site._healthBar?.destroy();
+    site._progressBar?.destroy();
+    site.sprite.destroy();
+  }
+
+  // Release a Worker's build slot so another can take it (docs/adr/0018). Idempotent. Mirrors
+  // _releaseClaim; called when the Site ends, the Worker is re-assigned, or it is destroyed.
+  _releaseBuildSlot(unit) {
+    const site = unit && unit._buildSlot;
+    if (!site) return;
+    site.builders.delete(unit);
+    unit._buildSlot = null;
+  }
+
+  // Draw a Site's amber construction progress bar above it and fade the sprite from transparent to
+  // solid (docs/adr/0018). Amber keeps it distinct from production-blue / gather-green / deliver-yellow.
+  _drawSiteProgress(site) {
+    site.syncVisual();
+    const g = site._progressBar || (site._progressBar = this.add.graphics());
+    const w = site.tileW * TILE * 0.7, h = 6;
+    const x = site._cx - w / 2;
+    const y = site.sprite.y - site.sprite.displayHeight - 16; // just above the Health bar
+    g.clear();
+    g.fillStyle(0x2a1a06, 1).fillRect(x, y, w, h);
+    g.fillStyle(0xffa033, 1).fillRect(x, y, w * site.progressFrac, h);
+    g.setDepth(2e6).setVisible(true);
   }
 
   // ── scenario: waves & objective (docs/adr/0014) ──────────────────────────────
@@ -801,6 +975,25 @@ void main(void){
     for (let dy = 0; dy < h; dy++)
       for (let dx = 0; dx < w; dx++)
         if (!this._groundClear(tx + dx, ty + dy)) return false;
+    return true;
+  }
+
+  // Like _groundClear, but for *placing a Building* (docs/adr/0018): only a BLOCKING occupant
+  // rejects the Tile. A non-blocking occupant — ground decor, base clearance — is built over (the
+  // Building's sprite covers it). Deposits, trees/obstacles, and other Buildings/Sites all block,
+  // so they still reject. Same terrain rules as _groundClear (no hills/ramps, off the map edge).
+  _tileBuildable(tx, ty) {
+    if (tx < 1 || tx >= MAP_W - 1 || ty < 1 || ty >= MAP_H - 1) return false;
+    if (this._isHill(tx, ty) || this._isRamp(tx, ty) || this._isHill(tx, ty - 1)) return false;
+    const occ = this._occupied.get(`${tx},${ty}`);
+    return !(occ && occ.blocking);
+  }
+
+  // True if every Tile of a w×h Footprint can take a Building (non-blocking occupants allowed).
+  _footprintBuildable(tx, ty, w, h) {
+    for (let dy = 0; dy < h; dy++)
+      for (let dx = 0; dx < w; dx++)
+        if (!this._tileBuildable(tx + dx, ty + dy)) return false;
     return true;
   }
 
@@ -1230,10 +1423,11 @@ void main(void){
 
   // Make a Building a Runner (CONTEXT.md): selectable, with a restored Assignment and a Run, plus
   // a label above it showing its assigned Flow. Buildings are ticked alongside Units.
-  _registerBuilding(b, label) {
+  _registerBuilding(b, label, presetFlowId = null) {
     b.label = `${label} ${this._nextUnitId++}`;
-    // Keyed by the full label (e.g. "Barracks 2"), matching _saveAssignments (see _registerUnit).
-    const savedId = this._assignments[b.label];
+    // A freshly-built Building carries the Flow its Build node chose (docs/adr/0018); a pre-placed
+    // one restores its saved Assignment by label (matching _saveAssignments / see _registerUnit).
+    const savedId = presetFlowId ?? this._assignments[b.label];
     b.assignedFlowId = savedId && flowLibrary.get(savedId) ? savedId : null;
     b.sprite.setInteractive({ useHandCursor: true });
     b.sprite.setData('building', b);
@@ -1358,6 +1552,7 @@ void main(void){
   // Flow assigned, it is idle.
   _startRun(runner) {
     this._releaseClaim(runner); // a fresh Run drops any Deposit held under the old one (docs/adr/0017)
+    this._releaseBuildSlot(runner); // …and any build slot held under it (docs/adr/0018)
     const entry = this._running && runner.assignedFlowId ? flowLibrary.get(runner.assignedFlowId) : null;
     runner.run = entry ? startRun(entry.id, entry.model) : null;
     if (runner.run) this._log(`${runner.label} starts flow "${entry.name}"`);
@@ -1379,6 +1574,7 @@ void main(void){
     if (node.kind === 'Wait') return p?.duration ? `Wait ${p.duration}s` : 'Wait';
     if (node.kind === 'Hold') return p?.duration ? `Hold ${p.duration}s` : 'Hold';
     if (node.kind === 'Train') return p?.type ? `Train ${p.type}` : 'Train';
+    if (node.kind === 'Build') return p?.buildingType ? `Build ${p.buildingType}` : 'Build';
     return node.kind;
   }
 
@@ -1709,7 +1905,7 @@ void main(void){
 
   // Enter pick mode: highlight the hovered Tile (green if Walkable, red if not). A click
   // on a Walkable Tile commits; right-click/Esc cancels (wired via the camera handlers).
-  _beginPositionPick({ onPicked, onCancel }) {
+  _beginPositionPick({ onPicked, onCancel, footprint = null }) {
     if (this._pick) this._endPick();
     const gfx = this.add.graphics().setDepth(2e6);
     // window-level so Esc works even though the pick starts from a DOM button (the Phaser
@@ -1718,6 +1914,7 @@ void main(void){
     window.addEventListener('keydown', escHandler);
     this._pick = {
       onPicked, onCancel, gfx, tile: null,
+      footprint: footprint && footprint.w > 0 ? footprint : { w: 1, h: 1 }, // Build picks a Footprint (docs/adr/0018)
       escOff: () => window.removeEventListener('keydown', escHandler),
     };
     const { tx, ty } = this._pointerTile(this.input.activePointer);
@@ -1727,13 +1924,16 @@ void main(void){
 
   _updatePickHighlight(tx, ty) {
     if (!this._pick) return;
-    const ok = this.walkable(tx, ty);
+    const { w, h } = this._pick.footprint;
+    // A 1×1 pick needs only a Walkable Tile; a Footprint pick (Build) needs the whole area buildable
+    // — non-blocking occupants like ground decor are allowed, only blocking ones reject (docs/adr/0018).
+    const ok = (w === 1 && h === 1) ? this.walkable(tx, ty) : this._footprintBuildable(tx, ty, w, h);
     const g = this._pick.gfx;
     g.clear();
     g.fillStyle(ok ? 0x33dd55 : 0xdd3333, 0.35);
     g.lineStyle(2, ok ? 0x66ff88 : 0xff6666, 0.9);
-    g.fillRect(tx * TILE, ty * TILE, TILE, TILE);
-    g.strokeRect(tx * TILE, ty * TILE, TILE, TILE);
+    g.fillRect(tx * TILE, ty * TILE, w * TILE, h * TILE);
+    g.strokeRect(tx * TILE, ty * TILE, w * TILE, h * TILE);
     this._pick.tile = { x: tx, y: ty, ok };
   }
 

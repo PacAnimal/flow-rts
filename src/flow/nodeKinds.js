@@ -123,6 +123,47 @@ export const NODE_KINDS = {
     ],
   },
 
+  Build: {
+    kind: 'Build',
+    category: 'action',
+    runner: 'building',
+    title: 'Build',
+    // The Command Center's flagship Action (docs/adr/0018): places a Construction Site of the
+    // chosen building type at a chosen Footprint, then completes — Workers (Construct) raise it.
+    // Gated by the 'builder' building capability so it appears only in builder Building Flows
+    // (the Command Center), not Barracks/Factory. Unlike Train, an unaffordable or blocked Build
+    // is a no-op that advances rather than blocking the cursor (docs/adr/0018).
+    buildingCapability: 'builder',
+    ports: [
+      { id: 'in', dir: 'in', type: 'exec', label: '' },
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+    // 'buildingType' is what to place; 'destination' is the Footprint's top-left anchor Tile
+    // (picked with a footprint preview); 'assignFlow' is an optional Building-Flow of the built
+    // type the finished Building is born running — Train's born-with-a-Flow, for Buildings.
+    params: [
+      { id: 'buildingType', type: 'buildingType', label: 'Building' },
+      { id: 'destination', type: 'tile', label: 'Location', pickLabel: 'Select Position…' },
+      { id: 'assignFlow', type: 'buildingFlowRef', label: 'Assign Flow' },
+    ],
+  },
+
+  Construct: {
+    kind: 'Construct',
+    category: 'action',
+    runner: 'unit',
+    title: 'Construct',
+    // A Worker raises a nearby Construction Site (docs/adr/0018, 0017). No Parameters — it claims
+    // one of the Site's ≤4 build slots within reach of where it was rallied, like Gather claims a
+    // Deposit, walks beside the Footprint, and adds build work. More Workers finish a Site faster
+    // (up to four). Waits in place if no Site in reach needs builders; completes when the Site
+    // finishes or is destroyed. Chainable.
+    ports: [
+      { id: 'in', dir: 'in', type: 'exec', label: '' },
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+  },
+
   Wait: {
     kind: 'Wait',
     category: 'control',

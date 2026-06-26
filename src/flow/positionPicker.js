@@ -30,12 +30,14 @@ function hideBanner() {
 
 // Ask the player to pick a Tile on the map. `current` (optional {x,y}) is the existing
 // value. `onPicked({x,y})` / `onCancel()` are called exactly once.
-export function pickPosition({ current = null, prompt = 'Click a tile to set the position — Esc to cancel', onPicked, onCancel } = {}) {
+// `footprint` (optional {w,h}) asks the picker to preview/validate a whole WxH area anchored at the
+// hovered Tile rather than a single Tile — used by Build for a Building's Footprint (docs/adr/0018).
+export function pickPosition({ current = null, prompt = 'Click a tile to set the position — Esc to cancel', footprint = null, onPicked, onCancel } = {}) {
   showBanner(prompt);
   let done = false;
   const finishPicked = (tile) => { if (done) return; done = true; hideBanner(); onPicked && onPicked(tile); };
   const finishCancel = () => { if (done) return; done = true; hideBanner(); onCancel && onCancel(); };
 
   if (!provider) { finishCancel(); return; }
-  provider({ current, onPicked: finishPicked, onCancel: finishCancel });
+  provider({ current, footprint, onPicked: finishPicked, onCancel: finishCancel });
 }

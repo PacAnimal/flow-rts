@@ -95,6 +95,34 @@ const EXECUTORS = {
   Train: (node, runner, world, dt, state) =>
     world.train(runner, node.params || {}, state, dt) ? done() : RUNNING,
 
+  // Place a Construction Site of the chosen building type at the chosen Footprint, then advance
+  // (docs/adr/0018). The world spends + places when it can; an unaffordable or blocked placement is
+  // a no-op. Either way Build completes immediately — the Command Center isn't tied up; Workers
+  // (Construct) do the building. Unset params ⇒ the world no-ops too.
+  Build: (node, runner, world) => {
+    world.build(runner, node.params || {});
+    return done();
+  },
+
+  // Add build work to a nearby Construction Site (docs/adr/0018), mirroring Gather (docs/adr/0017).
+  // Claim one of the Site's ≤4 build slots within rally reach (null ⇒ none free in reach, so hold
+  // the cursor and wait in place); walk to the standing Tile beside the Footprint; then contribute
+  // each tick. The world returns true once the Site completes or is destroyed, which frees the slot
+  // and advances the Worker. `slot`/`arrived` live in the per-node scratch so re-assigning resets.
+  Construct: (node, runner, world, dt, state) => {
+    if (!state.slot) {
+      state.slot = world.claimBuildSlot(runner);
+      if (!state.slot) return RUNNING; // nothing in reach needs builders — wait in place
+    }
+    if (!state.arrived) {
+      // Loose arrival: up to four Workers crowd one Site, so "near enough to build" beats fighting
+      // over one exact Tile (docs/adr/0017, 0018).
+      if (!world.moveToward(runner, state.slot.dest, true)) return RUNNING; // approach the Site
+      state.arrived = true;
+    }
+    return world.construct(runner, state.slot.handle, dt) ? done() : RUNNING;
+  },
+
   // Pick a random nearby walkable tile, attack-move there (engaging anything en route), and
   // complete on arrival so callers can loop or chain. Always waits at least one frame before
   // checking arrival so the movement system has time to set mv.arrived = false.

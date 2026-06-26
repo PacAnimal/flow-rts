@@ -170,7 +170,19 @@ immobile kind of Runner. The Command Center is the first Building and the place 
 Cargo to grow the Stockpile. Unlike a Unit, a Building does not move; its Flow drives a
 building-scoped action set (e.g. producing Units) rather than movement. Each Building has a type
 that fixes which Units it can produce — a Command Center trains Workers, a Barracks trains Marines.
+A Building enters the world either pre-placed by the Scenario or grown from a Construction Site.
 _Avoid_: structure, depot, base
+
+**Construction Site**:
+A placed-but-unfinished Building: where a Building will stand once built. A Command Center's Build
+Action places one (choosing the building type and a Footprint of Tiles); Workers then complete it.
+A Construction Site is its *own* thing, not a Building and not a Runner — it holds no Flow and runs
+nothing — but it occupies and blocks its Footprint from the moment it is placed and carries Health,
+so it is a destructible combat target (an Enemy can raze a half-built structure, freeing its
+Footprint and losing the investment). When its build work is complete it is replaced by the finished
+Building of that type. Rendered as the finished Building's sprite, transparent at first and fading
+solid as it nears completion.
+_Avoid_: scaffold (informal art-speak for the transparent rendering, not the entity), building site, blueprint
 
 **Enemy**:
 A Runner whose Faction is Enemy — not its own kind of thing. A spawned attacker is an Enemy
@@ -180,11 +192,12 @@ are not editable in the editor.
 _Avoid_: mob, monster, hostile, AI
 
 **Health**:
-How much damage a Runner can take before it is destroyed — a current/max pair carried by every
-Runner, Units and Buildings alike. At 0 the Runner is **destroyed**: removed from the map (its
-Footprint freed, for a Building) and its Run ends. Death is just Health reaching 0, not a
-separate Run status. A Runner's max Health (and its other combat numbers) come from its type's
-data table, not from any Node.
+How much damage a destructible map thing can take before it is destroyed — a current/max pair.
+Every Runner carries Health (Units and Buildings alike); so does a Construction Site, which has
+Health without being a Runner. At 0 the thing is **destroyed**: removed from the map (its Footprint
+freed, for a Building or Construction Site) and, for a Runner, its Run ends. Death is just Health
+reaching 0, not a separate Run status. Max Health (and the other combat numbers) come from a data
+table keyed by type, not from any Node.
 _Avoid_: hit points, HP, life, durability
 
 **Damage**:
@@ -218,6 +231,11 @@ on any abnormal end — the Worker is re-assigned or destroyed, or the Deposit i
 Deposit frees for the next Worker. If every Deposit in reach is already claimed, the Worker waits in
 place until one frees rather than crowding a claimed Deposit. A Claim is world state, not part of a
 Run, and is never saved. Distinct from an Assignment (a Flow bound to a Runner).
+The same mechanism spreads Workers across construction: a Construction Site has up to **four** build
+slots, and a Worker running Construct claims one free slot (within reach of where it was sent) and
+stands beside the Footprint contributing build work. Unlike a Deposit (exclusive — one claim), a
+Site admits up to four claims at once; with every nearby slot taken (or no Site in reach) the Worker
+waits in place. The Claim frees when the Site completes or is destroyed, or on any abnormal end.
 _Avoid_: reservation, lock, assignment (reserved for Flow↔Runner), booking, ownership, hold (that is
 Hold Position)
 

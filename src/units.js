@@ -125,10 +125,15 @@ export const UNIT_TYPES = {
   },
 };
 
+// tileW/tileH are the Building's Footprint in Tiles. `builder` marks a Building that can run the
+// Build Action (docs/adr/0018) — only the Command Center, for now. `buildable` + cost + buildTime
+// (the SOLO-Worker seconds to construct; N builders finish in buildTime/N, capped at 4) belong to
+// the types a Worker crew can raise from a Construction Site. Numbers live here, not as Parameters
+// (same call as UNIT_TYPES cost/buildTime, ADR-0013).
 export const BUILDING_TYPES = {
-  command_center: { id: 'command_center', label: 'Command Center', maxHealth: 1500 },
-  barracks:       { id: 'barracks',       label: 'Barracks',       maxHealth: 800  },
-  factory:        { id: 'factory',        label: 'Factory',        maxHealth: 900  },
+  command_center: { id: 'command_center', label: 'Command Center', maxHealth: 1500, tileW: 6, tileH: 6, builder: true },
+  barracks:       { id: 'barracks',       label: 'Barracks',       maxHealth: 800,  tileW: 6, tileH: 6, buildable: true, cost: { alloys: 150 }, buildTime: 20 },
+  factory:        { id: 'factory',        label: 'Factory',        maxHealth: 900,  tileW: 6, tileH: 6, buildable: true, cost: { alloys: 250 }, buildTime: 30 },
 };
 
 export function getUnitType(id) {
@@ -149,4 +154,11 @@ export function producibleBy(buildingKey) {
 // Drives the Library's per-building "new Flow" buttons: only producer Buildings get Train Flows.
 export function producerBuildings() {
   return Object.values(BUILDING_TYPES).filter((b) => producibleBy(b.id).length > 0);
+}
+
+// Building types a Worker crew can raise from a Construction Site — drives the Build node's
+// building-type dropdown (docs/adr/0018). Mirrors producibleBy for Units. The Command Center is
+// not buildable (it is the builder), so a base can't bootstrap itself from nothing.
+export function buildableBuildings() {
+  return Object.values(BUILDING_TYPES).filter((b) => b.buildable);
 }

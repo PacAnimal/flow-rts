@@ -8,7 +8,7 @@ import './editor.css';
 import { createStore } from './store.js';
 import { getNodeKind, getParams, getPort, nodeKindsForRunner } from './nodeKinds.js';
 import { CONDITIONS, getCondition } from '../conditions.js';
-import { producibleBy, producerBuildings, getBuildingType } from '../units.js';
+import { producibleBy, producerBuildings, buildableBuildings, getBuildingType } from '../units.js';
 import { pickPosition } from './positionPicker.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -185,7 +185,11 @@ export class FlowEditor {
     if (!this.paletteList) return;
     this.paletteList.replaceChildren();
     const targetKind = (this.model && this.model.targetKind) || 'unit';
+    const buildingType = this.model && this.model.buildingType;
     for (const k of nodeKindsForRunner(targetKind)) {
+      // Some Building Actions need a building capability (docs/adr/0018): Build appears only in
+      // Flows for a builder Building (the Command Center), not every Building Flow.
+      if (k.buildingCapability && !getBuildingType(buildingType)?.[k.buildingCapability]) continue;
       const item = el('div', `palette-item category-${k.category}`);
       item.appendChild(el('span', 'palette-title', k.title));
       item.appendChild(el('span', 'palette-tag', k.category));
@@ -478,6 +482,11 @@ export class FlowEditor {
         producibleBy(this.model.buildingType).map((u) => ({ value: u.id, label: u.label })));
     if (param.type === 'flowRef')
       return this._selectParam(node, param, this._unitFlowOptions());
+    if (param.type === 'buildingType')
+      return this._selectParam(node, param,
+        buildableBuildings().map((b) => ({ value: b.id, label: b.label })));
+    if (param.type === 'buildingFlowRef')
+      return this._selectParam(node, param, this._buildingFlowOptions(node));
     const row = el('div', 'param-row');
     row.appendChild(el('span', 'param-label', param.label));
     row.appendChild(
@@ -490,6 +499,16 @@ export class FlowEditor {
   _unitFlowOptions() {
     return this.library.list()
       .filter((e) => (e.model.targetKind || 'unit') === 'unit')
+      .map((e) => ({ value: e.id, label: e.name }));
+  }
+
+  // Library Flows assignable to the Building a Build node will raise (docs/adr/0018) — Building-Flows
+  // whose building type matches the node's chosen buildingType. Empty until a building type is picked.
+  _buildingFlowOptions(node) {
+    const bt = node.params && node.params.buildingType;
+    if (!bt) return [];
+    return this.library.list()
+      .filter((e) => e.model.targetKind === 'building' && e.model.buildingType === bt)
       .map((e) => ({ value: e.id, label: e.name }));
   }
 
@@ -598,9 +617,18 @@ export class FlowEditor {
     this.hide();
     this.toggleBtn.style.display = 'none'; // don't let the Flow toggle reopen mid-pick
     const reopen = () => { this.toggleBtn.style.display = ''; this.show(); };
+    // Build's destination anchors a whole Footprint, not a single Tile (docs/adr/0018): pass the
+    // chosen building's size so the picker previews and validates the full WxH area. All buildable
+    // types are 6×6 today, so default to that until a type is chosen.
+    let footprint = null;
+    if (node.kind === 'Build') {
+      const def = getBuildingType(node.params && node.params.buildingType);
+      footprint = { w: def?.tileW || 6, h: def?.tileH || 6 };
+    }
     pickPosition({
       current: (node.params && node.params[param.id]) || null,
       prompt: `Click a tile to set ${param.label} — Esc to cancel`,
+      footprint,
       onPicked: (tile) => {
         this.commit((m) => m.setParam(node.id, param.id, tile));
         render();
