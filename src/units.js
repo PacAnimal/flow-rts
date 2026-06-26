@@ -53,11 +53,12 @@ export const UNIT_TYPES = {
   tank: {
     id: 'tank',
     label: 'Tank',
-    maxHealth: 220,       // heavy armour, slow (speed set in the entity)
-    damage: 30,
-    range: 5,
-    aggroRadius: 7,
+    maxHealth: 220,       // heavy front-line brawler: durable, hits hard, but slow (speed set
+    damage: 30,           // in the entity) and short-ranged — it must close distance to fight.
+    range: 4,
+    aggroRadius: 6,       // peels off only for nearby Enemies; it can't chase what it can't reach
     attackCooldown: 1.6,
+    attackFx: 'cannon',   // one heavy, slow orange shell + concussive impact (effects.js)
     carryCapacity: 0,
     cost: { crystals: 200 },
     buildTime: 18,
@@ -66,11 +67,12 @@ export const UNIT_TYPES = {
   mech: {
     id: 'mech',
     label: 'Mech',
-    maxHealth: 140,       // ranged bruiser
-    damage: 18,
-    range: 5,
-    aggroRadius: 7,
+    maxHealth: 140,       // fast, long-range skirmisher: outranges most foes and kites (high speed
+    damage: 18,           // in the entity), but fragile — it dies fast if a brawler closes in.
+    range: 7,
+    aggroRadius: 9,         // wide aggro so it opens fire well before Enemies reach it
     attackCooldown: 1.1,
+    attackFx: 'autocannon', // rapid 3-round tracer burst (effects.js)
     carryCapacity: 0,
     cost: { crystals: 150 },
     buildTime: 14,
