@@ -104,6 +104,7 @@ export const UNIT_TYPES = {
     cost: { crystals: 100 },
     buildTime: 10,
     producedBy: 'barracks',
+    attackFx: 'shotgun',  // close-range pellet spread, not the generic laser bolt (effects.js)
   },
   chojin: {
     id: 'chojin',

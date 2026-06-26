@@ -2,8 +2,9 @@
 // Phaser side (like the entity sprites) and is driven by MapScene's onAttack callback: the
 // CombatSystem decides *that* an attack lands (docs/adr/0012); this only shows it. A unit type
 // may name an explicit `attackFx` (the Zapper's lightning, the Tank's heavy cannon shell, the
-// Mech's rapid autocannon burst); otherwise the effect falls back to reach — a short reach reads
-// as a melee strike (a three-stripe claw slash at the target), a longer reach as a ranged bolt
+// Mech's rapid autocannon burst, the Reaper's close-range shotgun spread); otherwise the effect
+// falls back to reach — a short reach reads as a melee strike (a three-stripe claw slash at the
+// target), a longer reach as a ranged bolt
 // (a laser that travels from attacker to target and flashes on impact). Each effect is a
 // self-destroying tween over a throwaway Graphics object, so there is no per-frame bookkeeping
 // for MapScene to do — fire and forget.
@@ -46,6 +47,8 @@ export class AttackEffects {
       this._cannon(attacker.x, this._bodyY(attacker), tx, ty, 0xff9a3c);
     } else if (def?.attackFx === 'autocannon') {
       this._autocannon(attacker.x, this._bodyY(attacker), tx, ty, color);
+    } else if (def?.attackFx === 'shotgun') {
+      this._shotgun(attacker.x, this._bodyY(attacker), tx, ty, color);
     } else if ((def?.range || 0) >= 2) {
       this._laser(attacker.x, this._bodyY(attacker), tx, ty, color);
     } else {
@@ -247,6 +250,58 @@ export class AttackEffects {
         g.lineStyle(1.5, 0xffffff, 0.95); g.beginPath(); g.moveTo(tx, ty); g.lineTo(hx, hy); g.strokePath();
       },
       onComplete: () => { g.destroy(); this._impact(x2, y2, color, 0.7); },
+    });
+  }
+
+  // Reaper: a close-range shotgun blast. One big muzzle flash, then a cone of short pellet
+  // streaks fired simultaneously with angular spread — they fan out and spatter small impacts
+  // around the target. Short by design (the Reaper's reach is only ~2 Tiles), so it reads as a
+  // wide point-blank spray rather than an aimed bolt.
+  _shotgun(x1, y1, x2, y2, color) {
+    const scene = this.scene;
+    this._muzzleFlash(x1, y1, color, 14);
+    const dx = x2 - x1, dy = y2 - y1;
+    const len = Math.hypot(dx, dy) || 1;
+    const baseAng = Math.atan2(dy, dx);
+    const N = 7;
+    const g = scene.add.graphics().setDepth(EFFECT_DEPTH);
+    // Pre-roll each pellet's angle (within a ±0.3rad cone), reach, and length so they're stable.
+    const pellets = [];
+    for (let i = 0; i < N; i++) {
+      const ang = baseAng + (Math.random() - 0.5) * 0.6;
+      const reach = len * (0.8 + Math.random() * 0.45);   // some fall short, some overshoot
+      pellets.push({
+        ux: Math.cos(ang), uy: Math.sin(ang),
+        reach, plen: 9 + Math.random() * 7,
+        ex: x1 + Math.cos(ang) * reach, ey: y1 + Math.sin(ang) * reach,
+      });
+    }
+    const state = { p: 0 };
+    scene.tweens.add({
+      targets: state,
+      p: 1,
+      duration: 110,            // fast spray
+      ease: 'Quad.Out',
+      onUpdate: () => {
+        const alpha = Math.max(0, 1 - state.p);
+        g.clear();
+        for (const pe of pellets) {
+          const head = state.p * pe.reach;
+          const tail = Math.max(0, head - pe.plen);
+          const hx = x1 + pe.ux * head, hy = y1 + pe.uy * head;
+          const tx = x1 + pe.ux * tail, ty = y1 + pe.uy * tail;
+          g.lineStyle(3, color, alpha * 0.25); g.beginPath(); g.moveTo(tx, ty); g.lineTo(hx, hy); g.strokePath();
+          g.lineStyle(1.5, 0xffffff, alpha);   g.beginPath(); g.moveTo(tx, ty); g.lineTo(hx, hy); g.strokePath();
+        }
+      },
+      onComplete: () => {
+        g.destroy();
+        // Spatter a few small impacts where the spread lands, clustered around the target.
+        for (let i = 0; i < 3; i++) {
+          const pe = pellets[i * 2];
+          this._impact(pe.ex, pe.ey, color, 0.5);
+        }
+      },
     });
   }
 
