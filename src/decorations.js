@@ -24,6 +24,7 @@ export const DECORATIONS = {
     clustered: false,
     scale: [0.8, 1.6],
     originY: 1.0,
+    flat: true,         // lies on the ground — Units walk over it, so it must render *under* them
   },
   tree: {
     id: 'tree',

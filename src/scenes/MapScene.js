@@ -1284,7 +1284,10 @@ void main(void){
     img.setOrigin(0.5, def.originY);
     const [lo, hi] = def.scale;
     img.setScale(def.w * TILE * (lo + r() * (hi - lo)) / Math.max(img.width, img.height));
-    img.setDepth(py);
+    // Flat ground scenery is walked over, so it must sit *below* the y-sorted band that holds
+    // Runners (depths 0…mapHeight·TILE). Park it in a small negative band, keeping a py-based
+    // tiebreak so overlapping flat Decorations still layer in a stable, natural order.
+    img.setDepth(def.flat ? -50 + py * 0.001 : py);
     this._occupy(tx, ty, def.w, def.h, `deco:${def.id}`, def.blocking);
   }
 
