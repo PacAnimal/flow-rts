@@ -395,8 +395,9 @@ export class MapScene extends Phaser.Scene {
 
     if (this.units.includes(runner)) {
       this.units = this.units.filter((u) => u !== runner);
-      // Non-player biological units leave a harvestable biopulp Deposit (CONTEXT.md).
-      if (runner.faction !== FACTION.PLAYER) this._spawnBiopulpDeposit(runner.tx, runner.ty);
+      // Every slain Unit — enemy, critter, or player — leaves a small harvestable biopulp
+      // carcass shown with its own `_dead` sprite (CONTEXT.md).
+      this._spawnBiopulpDeposit(runner);
     } else if (this.buildings.includes(runner)) {
       // Free the Building's Footprint so Units can path/stand there (docs/adr/0009).
       for (let dy = 0; dy < runner.tileH; dy++)
@@ -1345,7 +1346,7 @@ void main(void){
   // ── biopulp ───────────────────────────────────────────────────────────────
 
   // Scatter pre-existing carcasses so the player has biopulp to harvest before the first wave
-  // arrives. More appear dynamically as enemy and critter units die (_spawnBiopulpDeposit).
+  // arrives. More appear dynamically as any Unit dies, on either side (_spawnBiopulpDeposit).
   _placeCarcasses() {
     const r = mkRNG(7777);
     const COUNT = 20;
@@ -1366,17 +1367,27 @@ void main(void){
     }
   }
 
-  // Spawn a biopulp Deposit at a Tile when a non-player unit dies. Skipped if the Tile is
-  // already occupied (two units dying in the same spot, a deposit already there, etc.).
-  _spawnBiopulpDeposit(tx, ty) {
+  // A slain Unit leaves its own carcass as a small biopulp Deposit, drawn with the Unit's
+  // `_dead` sprite (falling back to a random carcass sprite if none is loaded). It yields far
+  // less than the geological carcasses scattered at map start (_placeCarcasses) — a single body
+  // is only SLAIN_BIOPULP_AMOUNT, roughly one Worker trip. Skipped if the Tile already holds a
+  // Deposit (two Units dying on the same Tile, an existing carcass, etc.).
+  _spawnBiopulpDeposit(runner) {
+    // Units track pixel x/y, not Tile coords — convert via the same feet→Tile map movement uses.
+    const { x: tx, y: ty } = this._unitTile(runner);
     if (this._depositByTile.has(`${tx},${ty}`)) return;
-    const sprites = RESOURCES.biopulp.sprites;
-    const key = sprites[(Math.random() * sprites.length) | 0];
+    const SLAIN_BIOPULP_AMOUNT = 15;
+    const deadKey = `${runner.type}_dead`;
+    const key = this.textures.exists(deadKey)
+      ? deadKey
+      : RESOURCES.biopulp.sprites[(Math.random() * RESOURCES.biopulp.sprites.length) | 0];
     const img = this.add.image(tx * TILE + TILE * 0.5, ty * TILE + TILE * 0.5, key);
     img.setOrigin(0.5, 0.5);
-    img.setScale(TILE * (1.5 + Math.random() * 1.0) / Math.max(img.width, img.height));
+    // Match the living Unit's footprint so the corpse reads as the same creature.
+    const size = runner._displaySize || TILE;
+    img.setScale(size / Math.max(img.width, img.height));
     img.setDepth(ty * TILE + TILE);
-    this._addDeposit('biopulp', tx, ty, img);
+    this._addDeposit('biopulp', tx, ty, img, SLAIN_BIOPULP_AMOUNT);
   }
 
   // ── decorations (docs/adr/0009) ─────────────────────────────────────────────
@@ -1423,9 +1434,12 @@ void main(void){
 
   // ── deposits & gathering (docs/adr/0008) ────────────────────────────────────
 
-  _addDeposit(type, tx, ty, sprite) {
+  // `amount` overrides the table's depositAmount (used for slain-Unit carcasses, which are far
+  // smaller than the geological deposits the table sizes); defaults to the full table amount.
+  _addDeposit(type, tx, ty, sprite, amount) {
     const def = getResource(type);
-    const deposit = { type, tx, ty, amount: def ? def.depositAmount : 0, max: def ? def.depositAmount : 0, sprite };
+    const full = amount != null ? amount : (def ? def.depositAmount : 0);
+    const deposit = { type, tx, ty, amount: full, max: full, sprite };
     // Amount-left bar (always visible, distinct from the Runner Health bar). Deposits never move,
     // so it's drawn once here and only redrawn in _collect when the amount changes — never per-frame.
     deposit._amountBar = this.add.graphics();
