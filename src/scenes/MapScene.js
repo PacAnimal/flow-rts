@@ -48,6 +48,11 @@ const DELIVER_RANGE = 2;
 // wandering to a far field, treating the rally as a "gather here" instruction (docs/adr/0017).
 const CLAIM_RADIUS = 5;
 
+// How far from a spread Move's destination a Runner will look for its own free Tile (docs/adr/0020).
+// Sized like CLAIM_RADIUS but a touch tighter — a spread line should read as "near here", and the
+// ~(2R+1)² candidate Tiles comfortably seat a typical squad before any overflow falls back to clump.
+const MOVE_SPREAD_RADIUS = 4;
+
 // localStorage key for per-Unit Flow assignments ({ [unit.label]: flowId }).
 const ASSIGN_KEY = 'flow-rts.assignments.v1';
 
@@ -181,9 +186,15 @@ export class MapScene extends Phaser.Scene {
         // keep stopping the Unit to fight and it could never leave its post. `loose` requests a
         // forgiving arrival so Units sharing a destination settle nearby (docs/adr/0017).
         if (unit.combat) unit.combat = null;
+        // Heading anywhere other than a held spread slot means the Unit is leaving it — free it
+        // (docs/adr/0020). A spread Move re-issues to its own claimed Tile, so its slot survives;
+        // any other Move (or a different spread destination) releases it for the next Runner.
+        if (unit._moveClaim && (unit._moveClaim.x !== destTile.x || unit._moveClaim.y !== destTile.y))
+          this._releaseMoveClaim(unit);
         this._movement.setGoal(unit, destTile.x, destTile.y, !!loose);
         return this._movement.arrived(unit);
       },
+      claimMoveTile: (unit, dest) => this._claimMoveTile(unit, dest),
       position: (unit) => ({ x: unit.x, y: unit.y }),
       walkable: (tx, ty) => this.walkable(tx, ty),
       claimDeposit: (unit) => this._claimDeposit(unit),
@@ -213,6 +224,7 @@ export class MapScene extends Phaser.Scene {
     };
 
     this._scenarioState = { time: 0, next: 0 }; // wave-clock cursor (docs/adr/0014)
+    this._moveClaims = new Map(); // "tx,ty" → Runner: spread-Move Tile Claims (docs/adr/0020)
 
     // Live inspector: while the sim is running, clicking a Runner opens its Flow in the editor as
     // a docked, read-only panel with the running node highlighted (see _inspectRunner /
@@ -343,6 +355,7 @@ export class MapScene extends Phaser.Scene {
     if (runner._progressBar) { runner._progressBar.destroy(); runner._progressBar = null; }
     this._releaseClaim(runner); // a destroyed Worker frees its Deposit (docs/adr/0017)
     this._releaseBuildSlot(runner); // and its build slot at a Construction Site (docs/adr/0018)
+    this._releaseMoveClaim(runner); // …and any spread-Move Tile it was standing on (docs/adr/0020)
     runner.run = null;
 
     // If we were inspecting this Runner, close the panel — there's nothing left to watch.
@@ -392,6 +405,7 @@ export class MapScene extends Phaser.Scene {
   // Set/refresh a Unit's combat intent (docs/adr/0012). Re-issuing the same intent preserves the
   // attack cooldown; a genuinely new intent (mode or Attack-Move destination changed) resets it.
   _setCombat(unit, mode, dest) {
+    this._releaseMoveClaim(unit); // taking a combat stance leaves any held spread slot (docs/adr/0020)
     const c = unit.combat;
     const sameDest = !dest || (c && c.dest && c.dest.x === dest.x && c.dest.y === dest.y);
     if (!c || c.mode !== mode || (mode === 'attackmove' && !sameDest)) {
@@ -1365,6 +1379,45 @@ void main(void){
     unit._claim = null;
   }
 
+  // World primitive for a spread Move (docs/adr/0020): the bare-Tile cousin of _claimDeposit.
+  // Generalises the Claim from a Deposit/build slot to a destination Tile so several Runners on one
+  // shared Flow fan out instead of stacking. Returns the nearest free Walkable Tile within
+  // MOVE_SPREAD_RADIUS of `dest` and reserves it (one Runner per Tile, tracked in _moveClaims).
+  // Held while the Runner travels to and stands on it; freed when the Runner next moves elsewhere
+  // (moveToward / _setCombat), is re-assigned, or is destroyed. Idempotent across ticks — and across
+  // an Interrupt's suspend/resume — by remembering which destination the slot was taken for, so the
+  // Runner keeps one slot rather than re-picking each frame. Unlike the gather/build claims it never
+  // blocks: with no free Tile in reach it falls back to `dest` (no Claim), so the Move still completes.
+  _claimMoveTile(unit, dest) {
+    const held = unit._moveClaim;
+    if (held && held.forX === dest.x && held.forY === dest.y) return { x: held.x, y: held.y };
+
+    let best = null, bestD = Infinity;
+    for (let dy = -MOVE_SPREAD_RADIUS; dy <= MOVE_SPREAD_RADIUS; dy++)
+      for (let dx = -MOVE_SPREAD_RADIUS; dx <= MOVE_SPREAD_RADIUS; dx++) {
+        const tx = dest.x + dx, ty = dest.y + dy;
+        if (!this.walkable(tx, ty)) continue;             // terrain/occupancy blocked (docs/adr/0009)
+        const owner = this._moveClaims.get(`${tx},${ty}`);
+        if (owner && owner !== unit) continue;            // another Runner's slot
+        const d = dx * dx + dy * dy;
+        if (d < bestD) { best = { x: tx, y: ty }; bestD = d; }
+      }
+    this._releaseMoveClaim(unit);                         // drop any slot from a previous destination
+    if (!best) return { x: dest.x, y: dest.y };           // area full ⇒ clump on the destination, no claim
+    this._moveClaims.set(`${best.x},${best.y}`, unit);
+    unit._moveClaim = { x: best.x, y: best.y, forX: dest.x, forY: dest.y };
+    return best;
+  }
+
+  // Release a Runner's spread-Move Tile Claim so the next Runner can take it (docs/adr/0020).
+  // Idempotent. Called when the Runner heads elsewhere, takes a combat stance, or is re-assigned/destroyed.
+  _releaseMoveClaim(unit) {
+    const c = unit && unit._moveClaim;
+    if (!c) return;
+    if (this._moveClaims.get(`${c.x},${c.y}`) === unit) this._moveClaims.delete(`${c.x},${c.y}`);
+    unit._moveClaim = null;
+  }
+
   // How much more of `type` this Unit can carry, given its Cargo (single slot) and capacity.
   _cargoRoom(unit, type) {
     const held = unit.cargo && unit.cargo.type === type ? unit.cargo.amount : 0;
@@ -1624,6 +1677,7 @@ void main(void){
   _startRun(runner) {
     this._releaseClaim(runner); // a fresh Run drops any Deposit held under the old one (docs/adr/0017)
     this._releaseBuildSlot(runner); // …and any build slot held under it (docs/adr/0018)
+    this._releaseMoveClaim(runner); // …and any spread-Move Tile slot (docs/adr/0020)
     const entry = this._running && runner.assignedFlowId ? flowLibrary.get(runner.assignedFlowId) : null;
     runner.run = entry ? startRun(entry.id, entry.model) : null;
     if (runner.run) this._log(`${runner.label} starts flow "${entry.name}"`);

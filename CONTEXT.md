@@ -247,19 +247,32 @@ Deposits rather than crowding one (see Claim).
 _Avoid_: resource node (Node is reserved), patch, source, vein
 
 **Claim**:
-A Worker's temporary hold on a single Deposit while it gathers there — the mechanism that spreads
-Workers across a cluster. At most one Worker claims a Deposit at a time; a gathering Worker takes
-the nearest *unclaimed* Deposit (within reach of where it was sent), walks to a free Tile beside it,
-and harvests. The Claim is released the moment the Worker's Cargo fills and it leaves to deliver (and
-on any abnormal end — the Worker is re-assigned or destroyed, or the Deposit is gathered empty), so a
-Deposit frees for the next Worker. If every Deposit in reach is already claimed, the Worker waits in
-place until one frees rather than crowding a claimed Deposit. A Claim is world state, not part of a
-Run, and is never saved. Distinct from an Assignment (a Flow bound to a Runner).
-The same mechanism spreads Workers across construction: a Construction Site has up to **four** build
-slots, and a Worker running Construct claims one free slot (within reach of where it was sent) and
-stands beside the Footprint contributing build work. Unlike a Deposit (exclusive — one claim), a
-Site admits up to four claims at once; with every nearby slot taken (or no Site in reach) the Worker
-waits in place. The Claim frees when the Site completes or is destroyed, or on any abnormal end.
+A Runner's temporary hold on a spot in the world — the mechanism that makes several Runners sharing
+one Flow spread across distinct places instead of crowding one. It takes three forms.
+
+Its original and primary form is a Worker's hold on a single Deposit while it gathers there. At most
+one Worker claims a Deposit at a time; a gathering Worker takes the nearest *unclaimed* Deposit
+(within reach of where it was sent), walks to a free Tile beside it, and harvests. The Claim is
+released the moment the Worker's Cargo fills and it leaves to deliver (and on any abnormal end — the
+Worker is re-assigned or destroyed, or the Deposit is gathered empty), so a Deposit frees for the next
+Worker. If every Deposit in reach is already claimed, the Worker waits in place until one frees rather
+than crowding a claimed Deposit.
+
+The second spreads Workers across construction: a Construction Site has up to **four** build slots,
+and a Worker running Construct claims one free slot (within reach of where it was sent) and stands
+beside the Footprint contributing build work. Unlike a Deposit (exclusive — one claim), a Site admits
+up to four claims at once; with every nearby slot taken (or no Site in reach) the Worker waits in
+place. The Claim frees when the Site completes or is destroyed, or on any abnormal end.
+
+The third spreads any Runner across a Move destination: when a Move has **spread** set, each Runner
+claims a distinct Tile near the destination rather than all heading to the same one, so a squad
+sharing one patrol Flow stands on separate Tiles instead of stacking. The hold lasts while the Runner
+travels to and stands on its Tile, freeing when it next moves, is re-assigned, or is destroyed.
+Unlike the Deposit and build-slot claims, a Runner that finds no free Tile does **not** wait — it
+falls back to the destination, so a Move always completes.
+
+A Claim is world state, not part of a Run, and is never saved. Distinct from an Assignment (a Flow
+bound to a Runner).
 _Avoid_: reservation, lock, assignment (reserved for Flow↔Runner), booking, ownership, hold (that is
 Hold Position)
 

@@ -33,9 +33,15 @@ const EXECUTORS = {
   Move: (node, runner, world) => {
     const dest = node.params?.destination;
     if (!dest) return done();
+    // With `spread` set, fan out instead of stacking (docs/adr/0020): head to a distinct Tile
+    // claimed near the destination, so several Runners sharing one Flow settle on separate Tiles.
+    // The world holds the Claim (freed when the Runner next moves, is re-assigned, or dies) and
+    // falls back to the destination when no Tile is free — so this stays a stateless re-issue like
+    // a plain Move, never blocks, and a full area is no worse than today's clump.
+    const goal = node.params?.spread ? world.claimMoveTile(runner, dest) : dest;
     // Loose arrival: many Units share one rally/delivery Tile, so "near enough" beats shoving
     // over the exact Tile (docs/adr/0017).
-    return world.moveToward(runner, dest, true) ? done() : RUNNING;
+    return world.moveToward(runner, goal, true) ? done() : RUNNING;
   },
 
   // Gather from a Deposit (docs/adr/0008, 0017). A gathering Worker CLAIMS the nearest unclaimed

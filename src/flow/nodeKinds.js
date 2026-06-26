@@ -51,9 +51,13 @@ export const NODE_KINDS = {
     ],
     // Parameters: literals configured on the node (ADR-0004). 'destination' is a Tile,
     // picked on the map via "Select Position"; it is the inline default of the future
-    // 'destination' Data port reserved in ADR-0002.
+    // 'destination' Data port reserved in ADR-0002. 'spread' (docs/adr/0020) makes several
+    // Runners sharing one Flow fan out: each claims a distinct Tile near the destination
+    // instead of all stacking on the one Tile — for patrol/rally lines. Off ⇒ all head to
+    // the exact destination (today's behaviour); a full area falls back to it, never blocks.
     params: [
       { id: 'destination', type: 'tile', label: 'Destination', pickLabel: 'Select Position…' },
+      { id: 'spread', type: 'boolean', label: 'Spread out', default: false },
     ],
   },
 
