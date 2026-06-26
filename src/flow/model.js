@@ -105,6 +105,26 @@ export class FlowModel {
     this.connections = this.connections.filter((c) => c.id !== id);
   }
 
+  // Deep-copy this Flow into an independent model with freshly-minted node and connection
+  // ids. A Flow is a shared definition (docs/adr/0003), so cloning must produce a *separate*
+  // definition that shares no mutable state — not another reference to the same nodes. Ids
+  // are remapped through `idMap` so the copied connections point at the copied nodes.
+  clone() {
+    const m = new FlowModel(this.targetKind, this.buildingType);
+    const idMap = new Map();
+    m.nodes = this.nodes.map((n) => {
+      const id = nextId('node');
+      idMap.set(n.id, id);
+      return { id, kind: n.kind, x: n.x, y: n.y, params: n.params ? { ...n.params } : {} };
+    });
+    m.connections = this.connections.map((c) => ({
+      id: nextId('conn'),
+      from: { node: idMap.get(c.from.node), port: c.from.port },
+      to: { node: idMap.get(c.to.node), port: c.to.port },
+    }));
+    return m;
+  }
+
   toJSON() {
     return {
       targetKind: this.targetKind,

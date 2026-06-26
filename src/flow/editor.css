@@ -205,6 +205,17 @@
   cursor: pointer;
 }
 .lib-delete:hover { color: #ff9b9b; background: #3a2626; border-color: #6a3b3b; }
+.lib-clone {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  font: 600 12px/1 system-ui, sans-serif;
+  color: #8aac9b;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.lib-clone:hover { color: #b8e0cd; background: #26342f; border-color: #3b6a55; }
 .lib-rename {
   flex: 1 1 auto;
   min-width: 0;

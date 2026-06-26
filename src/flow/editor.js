@@ -173,6 +173,14 @@ export class FlowEditor {
     this._renderLibrary();
   }
 
+  _cloneFlow(id) {
+    const entry = this.library.clone(id);
+    if (!entry) return;
+    this.library.save();
+    this.setFlow(entry.id);
+    this._renderLibrary();
+  }
+
   // A Flow's human-readable kind: its building type's label for a building Flow (docs/adr/0016),
   // else "unit". Drives the canvas header and the Library row tag.
   _kindLabel(model) {
@@ -211,6 +219,12 @@ export class FlowEditor {
       name.title = 'Double-click to rename';
       name.addEventListener('dblclick', (e) => { e.stopPropagation(); this._renameFlow(entry.id, name); });
       top.appendChild(name);
+      // Clone is offered for every Flow — including Protected ones, since duplicating is the
+      // only way to get an editable copy of a Protected Flow.
+      const clone = el('button', 'lib-clone', '⧉');
+      clone.title = 'Duplicate this Flow';
+      clone.addEventListener('click', (e) => { e.stopPropagation(); this._cloneFlow(entry.id); });
+      top.appendChild(clone);
       if (!entry.protected) {
         const del = el('button', 'lib-delete', '✕');
         del.title = 'Delete this Flow';

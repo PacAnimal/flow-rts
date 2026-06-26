@@ -40,6 +40,17 @@ export class FlowLibrary {
     return this.entries.find((e) => e.id === id) || null;
   }
 
+  // Duplicate a Flow into a new, independent Library entry placed right after its source.
+  // The copy is never Protected even when the original is, so cloning a Protected Flow is the
+  // way to get an editable variant of it. Returns the new entry, or null if `id` is unknown.
+  clone(id) {
+    const src = this.get(id);
+    if (!src) return null;
+    const entry = { id: nextId(), name: `${src.name} copy`, model: src.model.clone() };
+    this.entries.splice(this.entries.indexOf(src) + 1, 0, entry);
+    return entry;
+  }
+
   rename(id, name) {
     const entry = this.get(id);
     if (entry && name.trim()) entry.name = name.trim();
