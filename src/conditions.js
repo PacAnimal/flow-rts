@@ -12,8 +12,13 @@ export const CONDITIONS = {
   stockpile_gte: {
     id: 'stockpile_gte',
     label: 'Stockpile ≥ N',
-    // Implicitly Alloys for now (the only Resource); a Resource selector waits for a second.
-    args: [{ id: 'amount', type: 'number', label: 'Amount', min: 0, step: 10 }],
+    // Tests one Resource's Stockpile total against an amount. The Resource is chosen from a dropdown
+    // (the `resource` arg, rendered like other selector params); unset falls back to Alloys, so Flows
+    // authored before the selector existed keep their meaning.
+    args: [
+      { id: 'resource', type: 'resource', label: 'Resource' },
+      { id: 'amount', type: 'number', label: 'Amount', min: 0, step: 10 },
+    ],
   },
   // Combat Conditions (docs/adr/0012): an Enemy within attack range, or within an authored
   // radius — for `Branch`-gated guard loops.

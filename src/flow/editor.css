@@ -65,6 +65,23 @@
   border-radius: 6px;
 }
 
+/* Researched-Upgrades panel (docs/adr/0021): sibling to the materials panel, just below it. */
+.upgrades-panel {
+  position: fixed;
+  top: 50px;
+  left: 12px;
+  z-index: 1100;
+  padding: 6px 12px;
+  font: 600 12px/1 system-ui, sans-serif;
+  letter-spacing: 0.03em;
+  color: #ffe6a3;
+  background: rgba(20, 26, 31, 0.82);
+  border: 1px solid #6e5e35;
+  border-radius: 6px;
+}
+
+.upgrades-panel.hidden { display: none; }
+
 /* Objective banner (docs/adr/0014): centred win/lose card over the map. */
 .level-banner {
   position: fixed;

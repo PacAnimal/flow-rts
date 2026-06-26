@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Flow RTS is a real-time-strategy game the player controls *indirectly*: instead of issuing
 commands, the player authors **Flows** (node graphs) in a visual editor and assigns them to
 on-map **Runners** (Units and Buildings), which execute them. The current scenario is a survival
-defence — gather crystals, train units, and survive waves of enemies.
+defence — gather resources, train units, and survive waves of enemies.
 
 Vanilla ES modules, Phaser 3 for rendering, Vite for dev/build. No framework, no test suite, no
 TypeScript (JSDoc types only).

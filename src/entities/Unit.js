@@ -18,7 +18,11 @@ export class Unit {
 
     // Unit type (CONTEXT.md): the texture prefix doubles as the type key into the data table.
     this.type = texturePrefix;
-    const def = getUnitType(texturePrefix);
+    // Read *effective* stats so a Unit trained after a research is born upgraded (docs/adr/0021);
+    // the seam falls back to the base table for Enemies and before the registry exists. The
+    // live-read combat stats (damage/range) go through the same seam each tick; maxHealth and
+    // carryCapacity are stored here and bumped on existing Units when a research completes.
+    const def = scene._effectiveStats ? scene._effectiveStats(texturePrefix, faction) : getUnitType(texturePrefix);
     this.carryCapacity = def ? def.carryCapacity : 0;
 
     this._shadow = scene.add.image(x, y, 'unit_shadow').setDepth(1).setOrigin(0.5, 0.5);

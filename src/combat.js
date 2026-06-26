@@ -12,11 +12,15 @@ const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
 export class CombatSystem {
   // targetsFor(unit) → [{ entity, x, y, radius }] alive Enemies (point + footprint radius).
   // onAttack(attacker, entity) → apply the attacker's Damage (the world handles death).
+  // statsFor(unit) → the unit's *effective* combat stats (base table + researched Upgrades,
+  //   docs/adr/0021). Injected so combat stays engine-pure (ADR-0006) yet reads upgraded stats;
+  //   defaults to the raw type table when no seam is wired.
   // movement → the MovementSystem, for chase (setGoal) and stop.
-  constructor({ targetsFor, onAttack, movement }) {
+  constructor({ targetsFor, onAttack, movement, statsFor }) {
     this.targetsFor = targetsFor;
     this.onAttack = onAttack;
     this.movement = movement;
+    this.statsFor = statsFor || ((unit) => getUnitType(unit.type));
   }
 
   update(units, dt) {
@@ -26,7 +30,7 @@ export class CombatSystem {
   _tick(unit, dt) {
     const c = unit.combat;
     if (!c) return;
-    const def = getUnitType(unit.type);
+    const def = this.statsFor(unit); // effective stats: base + researched Upgrades (docs/adr/0021)
     if (!def || def.damage <= 0) { c.engaged = false; return; } // non-combatant (Worker)
 
     const rangePx = def.range * TILE;

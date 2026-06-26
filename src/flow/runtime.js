@@ -109,6 +109,13 @@ const EXECUTORS = {
   Train: (node, runner, world, dt, state) =>
     world.train(runner, node.params || {}, state, dt) ? done() : RUNNING,
 
+  // Research an Upgrade from a Building (docs/adr/0021), mirroring Train. The world blocks until the
+  // Stockpile affords the Upgrade (or another Building researching it finishes), waits the research
+  // time, then unlocks it player-wide; it returns true once the Upgrade is available (or instantly
+  // when already unlocked / nothing selected). Funding/timing live in the per-node scratch state.
+  Research: (node, runner, world, dt, state) =>
+    world.research(runner, node.params || {}, state, dt) ? done() : RUNNING,
+
   // Place a Construction Site of the chosen building type at the chosen Footprint, then advance
   // (docs/adr/0018). The world spends + places when it can; an unaffordable or blocked placement is
   // a no-op. Either way Build completes immediately — the Command Center isn't tied up; Workers

@@ -242,14 +242,14 @@ in ADR-0008), not Parameters on any Node.
 _Avoid_: hurt, hit, DPS, power
 
 **Resource**:
-A type of gatherable material that Workers collect — Crystals today; more (e.g. Gas, Wood)
-later. A Worker that gathers comes to hold an amount of a Resource. The Resource is the
-*what* (the kind of material); a Deposit is the *where* (a source of it on the map).
+A type of gatherable material that Workers collect — Alloys, Sludge, and Biopulp today; more
+(e.g. Gas, Wood) later. A Worker that gathers comes to hold an amount of a Resource. The Resource
+is the *what* (the kind of material); a Deposit is the *where* (a source of it on the map).
 _Avoid_: material, mineral, item, loot, goods
 
 **Deposit**:
 A gatherable source of a Resource occupying a single Tile on the map; what a Worker gathers
-from. A crystal cluster on the map is several Deposits on neighbouring Tiles (one Deposit per
+from. An Alloy cluster on the map is several Deposits on neighbouring Tiles (one Deposit per
 Tile). A Deposit blocks its Tile — no Unit can stand on or path through it — so a Worker
 gathers while standing on an adjacent Tile, i.e. *beside* the Deposit. A Deposit holds a
 finite amount of its Resource and is removed (its Tile freed) once gathered empty. At most one
@@ -259,7 +259,7 @@ _Avoid_: resource node (Node is reserved), patch, source, vein
 
 **Claim**:
 A Runner's temporary hold on a spot in the world — the mechanism that makes several Runners sharing
-one Flow spread across distinct places instead of crowding one. It takes three forms.
+one Flow spread across distinct places instead of crowding one. It takes four forms.
 
 Its original and primary form is a Worker's hold on a single Deposit while it gathers there. At most
 one Worker claims a Deposit at a time; a gathering Worker takes the nearest *unclaimed* Deposit
@@ -282,6 +282,13 @@ travels to and stands on its Tile, freeing when it next moves, is re-assigned, o
 Unlike the Deposit and build-slot claims, a Runner that finds no free Tile does **not** wait — it
 falls back to the destination, so a Move always completes.
 
+The fourth is a player-wide hold on an **Upgrade being Researched**: when a Building starts Research it
+claims that Upgrade, so a second Building reaching the same Research blocks rather than paying for it
+twice. Unlike the others this hold is not about a *place* in the world but about a one-time unlock; it
+frees when Research completes (the Upgrade becomes available to every matching Unit) or when the
+researching Building is destroyed — in which case the investment is forfeited and the Upgrade is free
+to Research afresh, the way a razed Construction Site loses its build investment.
+
 A Claim is world state, not part of a Run, and is never saved. Distinct from an Assignment (a Flow
 bound to a Runner).
 _Avoid_: reservation, lock, assignment (reserved for Flow↔Runner), booking, ownership, hold (that is
@@ -290,7 +297,7 @@ Hold Position)
 **Cargo**:
 The Resource amount a Unit is currently carrying — a single {Resource, amount} slot (a Unit
 carries one Resource type at a time), bounded by the Unit's carry capacity. Capacity defaults
-to one gather's worth (10 Crystals today) and may be raised later by upgrades. Gathering adds
+to one gather's worth (10 Alloys today) and may be raised by an Upgrade (Reinforced Cargo). Gathering adds
 its yield up to that capacity; a Worker already full does not gather. A Worker empties its Cargo
 into the player's Stockpile by delivering it at a Command Center.
 _Avoid_: inventory, load, payload, stockpile (that is the player-wide store), hold
@@ -301,6 +308,29 @@ grows when a Worker delivers its Cargo at a Command Center and is spent by produ
 node deducts a Unit's cost from it). Distinct from Cargo (one Unit's load): the Stockpile is the
 whole player's total.
 _Avoid_: bank, treasury, materials (the UI's label for it), resources (a Resource is the type)
+
+**Upgrade**:
+A permanent, player-wide improvement to a single Unit type, unlocked by Research and applied
+*retroactively* — every Unit of that type already on the map and every one trained afterwards gains it
+the instant it completes. An Upgrade targets exactly one Unit type and carries either stat modifiers
+(added to that type's base stats) or an ability grant (a named capability the world reads, for Upgrades
+that change *how* a Unit fights rather than its numbers). Base stats live in the type's data table; an
+Upgrade adjusts the *effective* stats read at use time, so the table stays the unchanging baseline. An
+Upgrade may declare prerequisites (none today). Upgrades are Player-only and per-playthrough — like the
+Stockpile they reset with the level and are not saved. Distinct from Research (the Action that unlocks
+it).
+_Avoid_: tech, research (that is the Action), buff, perk, level, tier
+
+**Research**:
+The Building-scoped Action that unlocks an Upgrade. A Building runs Research the way it runs Train: it
+blocks until the Stockpile affords the Upgrade's cost, deducts it, waits the Upgrade's research time (a
+building progress bar shows it), then marks the Upgrade unlocked player-wide. A Building can only
+Research Upgrades that target a Unit type it produces (a Barracks researches its infantry's Upgrades),
+mirroring how Train's menu is constrained. Researching an already-unlocked Upgrade is a no-op that
+advances; an Upgrade already being Researched elsewhere is **Claimed** (see Claim), so a second Building
+blocks rather than paying twice. Cost and research time live in the Upgrade's data table, not as
+Parameters (the same call ADR-0013 made for Train).
+_Avoid_: tech, upgrade (that is the unlock), study, train (that produces Units)
 
 **Scenario**:
 A level defined as data — the threat and the victory rules the player plays *against* and does

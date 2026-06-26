@@ -145,6 +145,27 @@ export const NODE_KINDS = {
     ],
   },
 
+  Research: {
+    kind: 'Research',
+    category: 'action',
+    runner: 'building',
+    title: 'Research Upgrade',
+    // A Building unlocks an Upgrade (docs/adr/0021), mirroring Train: it blocks until the Stockpile
+    // affords the Upgrade's cost, deducts it, waits the research time, then marks it unlocked
+    // player-wide (retroactively buffing every matching Unit). Re-entering an already-unlocked
+    // Upgrade is a no-op that advances, so "Research → Train → loop" flows past it once done.
+    ports: [
+      { id: 'in', dir: 'in', type: 'exec', label: '' },
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+    // 'upgradeType' picks what to research — a dropdown constrained to Upgrades targeting a Unit this
+    // Building produces (docs/adr/0016), rendered like Train's 'unitType'. Cost/time live in the
+    // Upgrade data table, not as Parameters (docs/adr/0013, 0021).
+    params: [
+      { id: 'upgradeType', type: 'upgradeType', label: 'Upgrade' },
+    ],
+  },
+
   Build: {
     kind: 'Build',
     category: 'action',

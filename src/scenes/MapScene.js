@@ -22,6 +22,7 @@ import { MovementSystem } from '../movement.js';
 import { getResource, RESOURCES } from '../resources.js';
 import { DECORATIONS } from '../decorations.js';
 import { FACTION, getUnitType, getBuildingType } from '../units.js';
+import { getUpgrade } from '../upgrades.js';
 import { applyDamage } from '../entities/runner.js';
 import { CombatSystem } from '../combat.js';
 import { AttackEffects } from '../effects.js';
@@ -123,6 +124,13 @@ export class MapScene extends Phaser.Scene {
     // the player can afford an early Build before the first delivery lands (docs/adr/0018).
     this._stockpile = { alloys: 200 };
 
+    // The player-wide Upgrade registry (docs/adr/0021): `done` is the set of researched Upgrade ids
+    // (applied retroactively by _effectiveStats); `inProgress` maps an Upgrade id to the Building
+    // researching it — a player-wide Claim (CONTEXT.md) so a second Building blocks rather than
+    // paying twice, freed if that Building is destroyed (forfeiting the investment). Player-only and
+    // per-playthrough, like the Stockpile: not saved, reset with the level.
+    this._upgrades = { done: new Set(), inProgress: new Map() };
+
     // Buildings are Runners too (CONTEXT.md): they hold Assignments and Runs and are ticked
     // alongside Units. Enemy Flows are data-authored and live here, out of the Library (ADR-0011).
     this.buildings = [];
@@ -167,11 +175,17 @@ export class MapScene extends Phaser.Scene {
     this._effects = new AttackEffects(this);
     this._combat = new CombatSystem({
       targetsFor: (unit) => this._targetsFor(unit),
+      // Read effective stats so researched Upgrades apply retroactively (docs/adr/0021).
+      statsFor: (unit) => this._effectiveStats(unit.type, unit.faction),
       onAttack: (attacker, target) => {
-        const def = getUnitType(attacker.type);
+        const def = this._effectiveStats(attacker.type, attacker.faction);
         this._effects.show(attacker, target, def);
         this._log(`${attacker.label} attacks ${target.label}`);
-        this._applyDamage(target, def?.damage || 0);
+        const dmg = def?.damage || 0;
+        this._applyDamage(target, dmg);
+        // Shaped Charges (docs/adr/0021): a granted `splash` spreads a fraction of the blow to
+        // Enemies near the target — the v1 transforming Upgrade, handled here in the world.
+        if (this._unitHasGrant(attacker, 'splash')) this._applySplash(attacker, target, dmg);
       },
       movement: this._movement,
     });
@@ -209,6 +223,8 @@ export class MapScene extends Phaser.Scene {
       roamDest: (unit) => this._roamDest(unit),
       // Production (docs/adr/0013): a building-scoped Action ticked on a Building Runner.
       train: (building, params, state, dt) => this._train(building, params, state, dt),
+      // Research (docs/adr/0021): a building-scoped Action that unlocks an Upgrade, mirroring Train.
+      research: (building, params, state, dt) => this._research(building, params, state, dt),
       // Construction (docs/adr/0018): Build places a Site; Construct claims a build slot and raises it.
       build: (building, params) => this._build(building, params),
       claimBuildSlot: (unit) => this._claimBuildSlot(unit),
@@ -234,6 +250,7 @@ export class MapScene extends Phaser.Scene {
 
     this._buildStartButton();
     this._buildMaterialsPanel();
+    this._buildUpgradesPanel();
     this._buildBanner();
     this._showTitleCard();
 
@@ -243,7 +260,7 @@ export class MapScene extends Phaser.Scene {
       clearTimeout(this._titleCardT1);
       clearTimeout(this._titleCardT2);
       this._titleCard?.remove();
-      for (const el of [this._uiOverlay, this._toolbar, this._materialsPanel, this._banner]) {
+      for (const el of [this._uiOverlay, this._toolbar, this._materialsPanel, this._upgradesPanel, this._banner]) {
         el?.remove();
       }
       if (this._onOverlayVisibility) {
@@ -370,6 +387,7 @@ export class MapScene extends Phaser.Scene {
     this._releaseClaim(runner); // a destroyed Worker frees its Deposit (docs/adr/0017)
     this._releaseBuildSlot(runner); // and its build slot at a Construction Site (docs/adr/0018)
     this._releaseMoveClaim(runner); // …and any spread-Move Tile it was standing on (docs/adr/0020)
+    this._releaseResearchClaim(runner); // …and any Upgrade it was researching, forfeit (docs/adr/0021)
     runner.run = null;
 
     // If we were inspecting this Runner, close the panel — there's nothing left to watch.
@@ -463,6 +481,104 @@ export class MapScene extends Phaser.Scene {
     for (const [res, amt] of Object.entries(cost || {}))
       this._stockpile[res] = (this._stockpile[res] || 0) - amt;
     this._updateMaterialsPanel();
+  }
+
+  // The effective stats of a Unit type for a Faction (docs/adr/0021): the base data-table entry with
+  // every researched Upgrade's `modifiers` added in. Player-only — Enemies (and any caller before the
+  // registry exists) get the untouched base table, so this is the single seam combat/movement/spawn
+  // read through instead of getUnitType directly. Returns a *fresh* merged object only when something
+  // applies, so the common no-upgrade path stays allocation-free.
+  _effectiveStats(type, faction) {
+    const base = getUnitType(type);
+    if (!base || faction !== FACTION.PLAYER || this._upgrades.done.size === 0) return base;
+    let stats = null;
+    for (const id of this._upgrades.done) {
+      const up = getUpgrade(id);
+      if (!up || up.unitType !== type || !up.modifiers) continue;
+      if (!stats) stats = { ...base };
+      for (const [k, d] of Object.entries(up.modifiers)) stats[k] = (stats[k] || 0) + d;
+    }
+    return stats || base;
+  }
+
+  // Does this Runner have a researched ability grant (e.g. 'splash')? Player-only, like _effectiveStats.
+  _unitHasGrant(unit, grant) {
+    if (!unit || unit.faction !== FACTION.PLAYER) return false;
+    for (const id of this._upgrades.done) {
+      const up = getUpgrade(id);
+      if (up && up.unitType === unit.type && up.grants?.includes(grant)) return true;
+    }
+    return false;
+  }
+
+  // Research executor backend (docs/adr/0021), mirroring _train. Block (return false) until the
+  // Upgrade can be researched — affordable and not held by another Building — then deduct, Claim it
+  // player-wide, wait the research time, and unlock it. Returns true once unlocked (or instantly when
+  // already done / nothing selected / wrong Building). `state` is the per-node Run scratch.
+  _research(building, params, state, dt) {
+    const up = getUpgrade(params.upgradeType);
+    if (!up) return true; // nothing selected — advance
+    if (getUnitType(up.unitType)?.producedBy !== building.type) return true; // wrong Building (docs/adr/0016)
+    if (this._upgrades.done.has(up.id)) return true; // already unlocked — no-op advance
+    if (!state.started) {
+      // Another Building already researching it? Block until it completes (docs/adr/0021) — don't pay
+      // twice. The Claim frees if that Building dies (forfeit), letting this one start fresh.
+      const claimant = this._upgrades.inProgress.get(up.id);
+      if (claimant && claimant !== building) return false;
+      if (!this._canAfford(up.cost)) return false; // block until affordable, like Train
+      this._spend(up.cost);
+      this._upgrades.inProgress.set(up.id, building);
+      state.started = true;
+      state.elapsed = 0;
+      state.duration = up.researchTime * 1000; // read by the building progress bar
+    }
+    state.elapsed += dt;
+    if (state.elapsed < state.duration) return false; // researching…
+    this._completeResearch(up);
+    return true;
+  }
+
+  // Unlock an Upgrade player-wide: add it to the researched set, free its in-progress Claim, and
+  // apply its effect to Units already on the map (live-read stats like damage/range need nothing).
+  _completeResearch(up) {
+    this._upgrades.done.add(up.id);
+    this._upgrades.inProgress.delete(up.id);
+    this._applyUpgradeToExisting(up);
+    this._updateUpgradesPanel();
+    this._log(`Researched ${up.label}`);
+  }
+
+  // Retroactively bump the *stored* stats of Player Units already of the Upgrade's type — maxHealth
+  // (raise current Health alongside max, so the buff is felt immediately) and carryCapacity. Other
+  // stats are read live through _effectiveStats, so they need no touch-up here (docs/adr/0021).
+  _applyUpgradeToExisting(up) {
+    const m = up.modifiers;
+    if (!m) return;
+    for (const u of this.units) {
+      if (u.faction !== FACTION.PLAYER || u.type !== up.unitType) continue;
+      if (m.maxHealth) { u.maxHealth += m.maxHealth; u.health += m.maxHealth; }
+      if (m.carryCapacity) u.carryCapacity += m.carryCapacity;
+    }
+  }
+
+  // Shaped Charges (docs/adr/0021): apply a fraction of the attacker's blow to other Enemies near the
+  // struck target. The direct hit already landed in onAttack; this adds the area effect around it.
+  _applySplash(attacker, target, dmg) {
+    const R = 2 * TILE;
+    const splash = Math.round(dmg * 0.5);
+    if (splash <= 0) return;
+    for (const u of this.units) {
+      if (u === target || u.faction === attacker.faction || u.health <= 0) continue;
+      if (Math.hypot(u.x - target.x, u.y - target.y) <= R) this._applyDamage(u, splash);
+    }
+  }
+
+  // Free any in-progress Research Claim this Building held (docs/adr/0021): a destroyed researcher
+  // forfeits the investment, leaving the Upgrade free to Research afresh. Mirrors the other Claim
+  // releases on _destroyRunner.
+  _releaseResearchClaim(building) {
+    for (const [id, b] of this._upgrades.inProgress)
+      if (b === building) this._upgrades.inProgress.delete(id);
   }
 
   _spawnTrainedUnit(building, def, flowId) {
@@ -1524,8 +1640,8 @@ void main(void){
       case 'cargo_empty':       return !unit.cargo || unit.cargo.amount <= 0;
       case 'deposit_adjacent':  return this._hasAdjacentDeposit(unit);
       case 'at_command_center': return this._adjacentToCommandCenter(unit);
-      case 'stockpile_gte':     return (this._stockpile.alloys || 0) >= (params.amount || 0);
-      case 'enemy_in_range':    return this._enemyWithin(unit, getUnitType(unit.type)?.range || 0);
+      case 'stockpile_gte':     return (this._stockpile[params.resource || 'alloys'] || 0) >= (params.amount || 0);
+      case 'enemy_in_range':    return this._enemyWithin(unit, this._effectiveStats(unit.type, unit.faction)?.range || 0);
       case 'enemy_nearby':      return this._enemyWithin(unit, params.amount || params.radius || 0);
       default:                  return false;
     }
@@ -1716,6 +1832,7 @@ void main(void){
     if (node.kind === 'Wait') return p?.duration ? `Wait ${p.duration}s` : 'Wait';
     if (node.kind === 'Hold') return p?.duration ? `Hold ${p.duration}s` : 'Hold';
     if (node.kind === 'Train') return p?.type ? `Train ${p.type}` : 'Train';
+    if (node.kind === 'Research') return p?.upgradeType ? `Research ${getUpgrade(p.upgradeType)?.label || p.upgradeType}` : 'Research';
     if (node.kind === 'Build') return p?.buildingType ? `Build ${p.buildingType}` : 'Build';
     return node.kind;
   }
@@ -1870,6 +1987,23 @@ void main(void){
       .join('     ');
   }
 
+  // Panel listing the player's researched Upgrades (docs/adr/0021), a sibling to the materials
+  // panel. Hidden until the first Upgrade lands so it doesn't clutter the early game.
+  _buildUpgradesPanel() {
+    const panel = document.createElement('div');
+    panel.className = 'upgrades-panel hidden';
+    document.body.appendChild(panel);
+    this._upgradesPanel = panel;
+    this._updateUpgradesPanel();
+  }
+
+  _updateUpgradesPanel() {
+    if (!this._upgradesPanel) return;
+    const done = [...this._upgrades.done].map((id) => getUpgrade(id)?.label).filter(Boolean);
+    this._upgradesPanel.classList.toggle('hidden', done.length === 0);
+    this._upgradesPanel.textContent = done.length ? `✦ ${done.join('   ✦ ')}` : '';
+  }
+
   // Centre banner for the Objective outcome (docs/adr/0014) — hidden until win/lose.
   _buildBanner() {
     const b = document.createElement('div');
@@ -1996,7 +2130,9 @@ void main(void){
     if (run && run.status === 'running') {
       const node = this._resolveFlow(run.flowId)?.getNode(run.current);
       const st = run.state;
-      if (node && node.kind === 'Train' && st && st.started && st.duration > 0) {
+      // Train and Research share the same scratch shape (started/elapsed/duration), so one bar
+      // covers both Building-scoped timed Actions (docs/adr/0013, 0021).
+      if (node && (node.kind === 'Train' || node.kind === 'Research') && st && st.started && st.duration > 0) {
         frac = st.elapsed / st.duration;
       }
     }

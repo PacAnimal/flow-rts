@@ -9,6 +9,8 @@ import { createStore } from './store.js';
 import { getNodeKind, getParams, getPort, nodeKindsForRunner } from './nodeKinds.js';
 import { CONDITIONS, getCondition } from '../conditions.js';
 import { producibleBy, producerBuildings, buildableBuildings, getBuildingType } from '../units.js';
+import { researchableBy } from '../upgrades.js';
+import { RESOURCES } from '../resources.js';
 import { pickPosition } from './positionPicker.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -589,6 +591,12 @@ export class FlowEditor {
     if (param.type === 'unitType')
       return this._selectParam(node, param,
         producibleBy(this.model.buildingType).map((u) => ({ value: u.id, label: u.label })));
+    if (param.type === 'upgradeType')
+      return this._selectParam(node, param,
+        researchableBy(this.model.buildingType).map((u) => ({ value: u.id, label: u.label })));
+    if (param.type === 'resource')
+      return this._selectParam(node, param,
+        Object.values(RESOURCES).map((r) => ({ value: r.id, label: `${r.glyph} ${r.label}` })));
     if (param.type === 'flowRef')
       return this._selectParam(node, param, this._unitFlowOptions());
     if (param.type === 'buildingType')

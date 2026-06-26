@@ -60,7 +60,7 @@ export const UNIT_TYPES = {
     attackCooldown: 1.6,
     attackFx: 'cannon',   // one heavy, slow orange shell + concussive impact (effects.js)
     carryCapacity: 0,
-    cost: { crystals: 200 },
+    cost: { sludge: 200 }, // heavy industry runs on sludge (the Factory line)
     buildTime: 18,
     producedBy: 'factory',
   },
@@ -74,7 +74,7 @@ export const UNIT_TYPES = {
     attackCooldown: 1.1,
     attackFx: 'autocannon', // rapid 3-round tracer burst (effects.js)
     carryCapacity: 0,
-    cost: { crystals: 150 },
+    cost: { sludge: 150 }, // heavy industry runs on sludge (the Factory line)
     buildTime: 14,
     producedBy: 'factory',
   },
@@ -87,7 +87,7 @@ export const UNIT_TYPES = {
     aggroRadius: 6,
     attackCooldown: 0.7,
     carryCapacity: 0,
-    cost: { crystals: 75 },
+    cost: { biopulp: 75 }, // elite Barracks infantry, funded by harvesting slain Enemies
     buildTime: 8,
     producedBy: 'barracks',
     attackFx: 'lightning', // crackling arc, not the generic laser bolt (see effects.js)
@@ -101,7 +101,7 @@ export const UNIT_TYPES = {
     aggroRadius: 8,
     attackCooldown: 0.9,
     carryCapacity: 0,
-    cost: { crystals: 100 },
+    cost: { biopulp: 100 }, // elite Barracks infantry, funded by harvesting slain Enemies
     buildTime: 10,
     producedBy: 'barracks',
     attackFx: 'shotgun',  // close-range pellet spread, not the generic laser bolt (effects.js)
