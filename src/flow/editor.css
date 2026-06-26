@@ -19,24 +19,36 @@
 .flow-toggle.active { background: #3a7bd5; border-color: #5b97e8; }
 
 /* Simulation Start/Pause control — top centre, above the canvas. */
-.sim-toggle {
+/* Centred toolbar holding the Start/Pause and Restart buttons. */
+.sim-toolbar {
   position: fixed;
   top: 12px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 1100;
+  display: flex;
+  gap: 8px;
+}
+.sim-toggle, .sim-restart {
   padding: 8px 20px;
   font: 700 13px/1 system-ui, sans-serif;
   letter-spacing: 0.04em;
   color: #e8eef2;
   border-radius: 6px;
   cursor: pointer;
+}
+.sim-toggle {
   background: #2f7d4f;
   border: 1px solid #43a86a;
 }
 .sim-toggle:hover { background: #36915b; }
 .sim-toggle.running { background: #8a5a2b; border-color: #b3843f; }
 .sim-toggle.running:hover { background: #9c6731; }
+.sim-restart {
+  background: #444a52;
+  border: 1px solid #6a727c;
+}
+.sim-restart:hover { background: #525962; }
 
 /* Materials panel — player Stockpile readout, top-left. */
 .materials-panel {

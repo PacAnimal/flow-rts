@@ -236,6 +236,16 @@ export class MapScene extends Phaser.Scene {
     this._buildMaterialsPanel();
     this._buildBanner();
 
+    // scene.restart() (the Restart button) re-runs create(), which appends fresh <body> overlays.
+    // Remove this run's overlays on shutdown so they don't accumulate across restarts.
+    this.events.once('shutdown', () => {
+      for (const el of [this._uiOverlay, this._toolbar, this._materialsPanel, this._banner]) {
+        el?.remove();
+      }
+      if (this._onOverlayVisibility) {
+        window.removeEventListener('assign-overlay-visibility', this._onOverlayVisibility);
+      }
+    });
   }
 
   // Per-frame loop (docs/adr/0005, 0007): while running, tick every Run (a running Move sets
@@ -1719,12 +1729,41 @@ void main(void){
   }
 
   _buildStartButton() {
-    const btn = document.createElement('button');
-    btn.className = 'sim-toggle';
-    btn.addEventListener('click', () => this._setRunning(!this._running));
-    document.body.appendChild(btn);
-    this._startBtn = btn;
+    const bar = document.createElement('div');
+    bar.className = 'sim-toolbar';
+
+    const start = document.createElement('button');
+    start.className = 'sim-toggle';
+    start.addEventListener('click', () => this._setRunning(!this._running));
+
+    const restart = document.createElement('button');
+    restart.className = 'sim-restart';
+    restart.textContent = '↻ Restart';
+    restart.addEventListener('click', () => this._restartLevel());
+
+    // These buttons are a DOM overlay above the canvas, but Phaser also listens for pointerup on
+    // `window` (inputWindowEvents, to catch drags ending off-canvas). Without this, a click on a
+    // button bubbles to that listener, which hit-tests a Runner underneath and fires gameobjectup —
+    // popping the assign overlay "through" the button. Swallow the pointer events at the source.
+    for (const el of [start, restart]) {
+      for (const ev of ['pointerdown', 'pointerup', 'mousedown', 'mouseup']) {
+        el.addEventListener(ev, (e) => e.stopPropagation());
+      }
+    }
+
+    bar.append(start, restart);
+    document.body.appendChild(bar);
+    this._toolbar = bar;
+    this._startBtn = start;
     this._updateStartBtn();
+  }
+
+  // Restart the level from scratch (docs/adr/0014). The scene owns DOM overlays appended to <body>
+  // (label/health layer, HUD panels, banner) that scene.restart() would otherwise leak by appending
+  // fresh copies in create(); the shutdown handler registered in create() tears them down first.
+  _restartLevel() {
+    this._stopInspecting(); // the inspected Runner is about to be destroyed
+    this.scene.restart();
   }
 
   _updateStartBtn() {
@@ -1994,11 +2033,15 @@ void main(void){
     // open so clicks on a flow row don't fall through to the Runner behind it (docs/adr/0001).
     // The overlay opens during gameobjectup (a pointerup), so the matching endDrag never runs —
     // clear the dangling drag here, or the map would pan on mouse-move after the overlay closes.
-    window.addEventListener('assign-overlay-visibility', (e) => {
+    // Stored on `this` so the shutdown handler can remove it: it's a window listener (outside
+    // Phaser's input plugin), so scene.restart() would otherwise leave a stale copy bound to the
+    // previous create()'s `drag` closure.
+    this._onOverlayVisibility = (e) => {
       this.input.enabled = !e.detail.open;
       if (e.detail.open) { drag = null; this._dragMoved = false; }
       this.game.canvas.style.cursor = this._pick ? 'crosshair' : 'grab';
-    });
+    };
+    window.addEventListener('assign-overlay-visibility', this._onOverlayVisibility);
 
     // Click a Runner → open the assign-flow overlay, filtered to that Runner's kind (docs/adr/
     // 0015). Ignore while picking or after a drag. A Unit picks Unit-Flows; a Building, Building-
