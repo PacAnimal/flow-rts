@@ -235,10 +235,14 @@ export class MapScene extends Phaser.Scene {
     this._buildStartButton();
     this._buildMaterialsPanel();
     this._buildBanner();
+    this._showTitleCard();
 
     // scene.restart() (the Restart button) re-runs create(), which appends fresh <body> overlays.
     // Remove this run's overlays on shutdown so they don't accumulate across restarts.
     this.events.once('shutdown', () => {
+      clearTimeout(this._titleCardT1);
+      clearTimeout(this._titleCardT2);
+      this._titleCard?.remove();
       for (const el of [this._uiOverlay, this._toolbar, this._materialsPanel, this._banner]) {
         el?.remove();
       }
@@ -1880,6 +1884,55 @@ void main(void){
     this._banner.classList.toggle('win', won);
     this._banner.classList.toggle('lose', !won);
     this._banner.classList.remove('hidden');
+  }
+
+  _showTitleCard() {
+    if (!document.getElementById('dw-title-style')) {
+      const style = document.createElement('style');
+      style.id = 'dw-title-style';
+      style.textContent = `
+        @keyframes dwFlyIn {
+          from { opacity:0; transform:scale(0.04) translateY(-80px); filter:blur(12px); }
+          70%  { filter:blur(0); }
+          to   { opacity:1; transform:scale(1) translateY(0); filter:blur(0); }
+        }
+        @keyframes dwFadeOut {
+          from { opacity:1; }
+          to   { opacity:0; }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    const el = document.createElement('div');
+    el.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;z-index:1000';
+
+    const text = document.createElement('div');
+    text.textContent = 'Drone Wars';
+    text.style.cssText = [
+      'font-family:Impact,"Arial Black",sans-serif',
+      'font-size:96px',
+      'font-weight:900',
+      'letter-spacing:10px',
+      'text-transform:uppercase',
+      'color:#cc1111',
+      // bevel: top-left highlight + bottom-right shadow + outer glow
+      'text-shadow:-2px -2px 0 #ff6666,2px 2px 0 #550000,-3px -3px 1px #ff9999,3px 3px 3px #220000,0 0 40px rgba(200,0,0,0.55)',
+      'animation:dwFlyIn 700ms cubic-bezier(0.22,1,0.36,1) forwards',
+    ].join(';');
+
+    el.appendChild(text);
+    document.body.appendChild(el);
+    this._titleCard = el;
+
+    // after fly-in (700ms) + hold (500ms) = 1200ms, fade out over 1000ms
+    this._titleCardT1 = setTimeout(() => {
+      text.style.animation = 'dwFadeOut 1000ms ease-out forwards';
+      this._titleCardT2 = setTimeout(() => {
+        el.remove();
+        this._titleCard = null;
+      }, 1000);
+    }, 1200);
   }
 
   // Sync a Unit's sprite + DOM label to its logical {x,y} (feet position), keeping depth = y so
