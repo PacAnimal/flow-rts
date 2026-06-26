@@ -36,8 +36,8 @@ export const UNIT_TYPES = {
     id: 'marine',
     label: 'Marine',
     maxHealth: 55,
-    damage: 8,
-    range: 4,             // Tiles — attacks an Enemy within this reach
+    damage: 12,           // viable early line: a faster Chojin (speed 3.5) closes anyway, so the
+    range: 4,             // Marine must trade efficiently in numbers rather than get deleted 4:1.
     aggroRadius: 6,       // Tiles — peels off Attack-Move to engage within this (ADR-0012)
     attackCooldown: 1.0,  // seconds between attacks
     carryCapacity: 0,
@@ -69,7 +69,7 @@ export const UNIT_TYPES = {
     label: 'Mech',
     maxHealth: 140,       // fast, long-range skirmisher: outranges most foes and kites (high speed
     damage: 18,           // in the entity), but fragile — it dies fast if a brawler closes in.
-    range: 7,
+    range: 5,             // trimmed from 7 so it isn't the strictly-best answer to everything;
     aggroRadius: 9,         // wide aggro so it opens fire well before Enemies reach it
     attackCooldown: 1.1,
     attackFx: 'autocannon', // rapid 3-round tracer burst (effects.js)
