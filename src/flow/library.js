@@ -22,7 +22,7 @@ const hasStorage = typeof localStorage !== 'undefined';
 
 export class FlowLibrary {
   constructor() {
-    /** @type {Array<{id:string, name:string, model:FlowModel}>} */
+    /** @type {Array<{id:string, name:string, model:FlowModel, category?:string}>} */
     this.entries = [];
   }
 
@@ -46,7 +46,9 @@ export class FlowLibrary {
   clone(id) {
     const src = this.get(id);
     if (!src) return null;
+    // A clone is a variant in the same bucket, so it inherits the source's Category (CONTEXT.md).
     const entry = { id: nextId(), name: `${src.name} copy`, model: src.model.clone() };
+    if (src.category) entry.category = src.category;
     this.entries.splice(this.entries.indexOf(src) + 1, 0, entry);
     return entry;
   }
@@ -55,6 +57,27 @@ export class FlowLibrary {
     const entry = this.get(id);
     if (entry && name.trim()) entry.name = name.trim();
     return entry;
+  }
+
+  // Set (or clear) a Flow's Category. Categories are freeform and single-membership (CONTEXT.md):
+  // a blank name clears it, leaving the Flow Uncategorized. There is no Category roster — the set
+  // of Categories is whatever names are in use, so naming a new one here creates it and a Category
+  // ceases to exist once its last Flow drops it.
+  setCategory(id, category) {
+    const entry = this.get(id);
+    if (!entry) return null;
+    const name = (category || '').trim();
+    if (name) entry.category = name;
+    else delete entry.category;
+    return entry;
+  }
+
+  // The distinct Categories currently in use across Flows, sorted — the suggestion set offered
+  // when labelling a Flow. Derived on demand (no stored roster), so it never lists empty Categories.
+  categories() {
+    const set = new Set();
+    for (const e of this.entries) if (e.category) set.add(e.category);
+    return [...set].sort((a, b) => a.localeCompare(b));
   }
 
   remove(id) {
@@ -72,6 +95,7 @@ export class FlowLibrary {
       entries: this.entries.map((e) => ({
         id: e.id, name: e.name, model: e.model.toJSON(),
         ...(e.protected ? { protected: true } : {}),
+        ...(e.category ? { category: e.category } : {}),
       })),
     };
   }
@@ -88,11 +112,14 @@ export class FlowLibrary {
     if (!raw) return;
     try {
       const data = JSON.parse(raw);
+      // No version bump for Categories (CONTEXT.md): a legacy v1 entry simply lacks `category`
+      // and reads back as Uncategorized.
       this.entries = (data?.entries ?? []).map((e) => ({
         id: e.id,
         name: e.name,
         model: FlowModel.fromJSON(e.model),
         ...(e.protected ? { protected: true } : {}),
+        ...(e.category ? { category: e.category } : {}),
       }));
       bumpSeqFrom(this.entries.map((e) => e.id));
     } catch { /* corrupt — start empty */ }

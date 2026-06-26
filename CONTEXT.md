@@ -21,6 +21,17 @@ _Avoid_: graph, script, program, behaviour tree
 The player's collection of authored Flows. The source from which Flows are assigned to Units.
 _Avoid_: list, catalogue, project
 
+**Category**:
+A player-authored label that files a Flow under a named bucket to organise the Library — e.g.
+*Economy*, *Combat*, *Experimental*. A Flow belongs to at most one Category; an unlabelled Flow is
+**Uncategorized**. Categories are freeform: the set in play is simply the distinct names currently
+used across Flows — there is no managed roster, so a Category is created by naming it on a Flow and
+disappears when its last Flow leaves it. A Category is Library-organisation metadata carried on the
+Library entry beside the Flow's name, never part of the Flow definition: it is not assigned to a
+Runner and editing it changes no behaviour. Purely an authoring aid — it groups Flows into
+collapsible sections in the Library panel and the assign overlay and has no effect on how a Flow runs.
+_Avoid_: folder, tag, group, catalogue (Library's avoid-word), bucket
+
 **Runner**:
 Any on-map thing that can be assigned a Flow and hold a Run — the thing a Flow runs *on*.
 Units and Buildings are both Runners; the Assignment, Run, cursor, and OnStart machinery is

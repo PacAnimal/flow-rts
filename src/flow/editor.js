@@ -31,6 +31,10 @@ export class FlowEditor {
     this._onClose = null;
     this._activeNodeId = null;
     this._activeStatus = null;
+    // Which Category sections are folded shut in the Library panel, by Category name (CONTEXT.md).
+    // Purely a view preference, persisted on its own so it survives reloads without touching the
+    // Library data; Uncategorized is keyed by the empty string.
+    this._collapsedCats = loadCollapsed();
     this._build();
     // Reactive loop: structural edits go through commit(), which bumps this store; the
     // subscription re-renders. subscribe fires once now (model is null → _render no-ops).
@@ -206,43 +210,134 @@ export class FlowEditor {
     }
   }
 
+  // Render the Library grouped into collapsible Category sections (CONTEXT.md). Sections are sorted
+  // alphabetically with Uncategorized last; the active Flow's section is forced open so selecting it
+  // can never hide it. A shared <datalist> feeds the per-row Category editor with names already in use.
   _renderLibrary() {
     this.libList.replaceChildren();
+
+    // One datalist of Categories-in-use, referenced by every row's Category input for autocomplete.
+    const suggestions = this.library.categories();
+    const datalist = el('datalist');
+    datalist.id = 'lib-category-suggestions';
+    for (const c of suggestions) datalist.appendChild(el('option')).value = c;
+    this.libList.appendChild(datalist);
+
+    // Bucket entries by Category, preserving Library order within each bucket.
+    const buckets = new Map(); // category name ('' = Uncategorized) -> entries
     for (const entry of this.library.list()) {
-      const row = el('div', 'lib-item');
-      if (entry.id === this.currentId) row.classList.add('active');
-      row.addEventListener('click', () => { if (entry.id !== this.currentId) this.setFlow(entry.id); });
-
-      // Top line: the Flow name, plus a delete button (Protected Flows can't be deleted).
-      const top = el('div', 'lib-item-top');
-      const name = el('span', 'lib-name', entry.name);
-      name.title = 'Double-click to rename';
-      name.addEventListener('dblclick', (e) => { e.stopPropagation(); this._renameFlow(entry.id, name); });
-      top.appendChild(name);
-      // Clone is offered for every Flow — including Protected ones, since duplicating is the
-      // only way to get an editable copy of a Protected Flow.
-      const clone = el('button', 'lib-clone', '⧉');
-      clone.title = 'Duplicate this Flow';
-      clone.addEventListener('click', (e) => { e.stopPropagation(); this._cloneFlow(entry.id); });
-      top.appendChild(clone);
-      if (!entry.protected) {
-        const del = el('button', 'lib-delete', '✕');
-        del.title = 'Delete this Flow';
-        del.addEventListener('click', (e) => { e.stopPropagation(); this._deleteFlow(entry.id); });
-        top.appendChild(del);
-      }
-      row.appendChild(top);
-
-      // Meta line: kind / protected badges + node count.
-      const meta = el('div', 'lib-meta');
-      meta.appendChild(el('span', `lib-kind kind-${entry.model.targetKind}`, this._kindLabel(entry.model)));
-      if (entry.protected) meta.appendChild(el('span', 'lib-protected', 'Protected'));
-      const count = entry.model.nodes.length;
-      meta.appendChild(el('span', 'lib-count', `${count} node${count === 1 ? '' : 's'}`));
-      row.appendChild(meta);
-
-      this.libList.appendChild(row);
+      const cat = entry.category || '';
+      if (!buckets.has(cat)) buckets.set(cat, []);
+      buckets.get(cat).push(entry);
     }
+    const cats = [...buckets.keys()].sort((a, b) => {
+      if (a === '') return 1; // Uncategorized always last
+      if (b === '') return -1;
+      return a.localeCompare(b);
+    });
+
+    const activeCat = this.currentId ? (this.library.get(this.currentId)?.category || '') : null;
+    for (const cat of cats) {
+      const entries = buckets.get(cat);
+      // The active Flow's section stays open regardless of the stored fold preference.
+      const collapsed = this._collapsedCats.has(cat) && cat !== activeCat;
+      const section = el('div', 'lib-section');
+      if (collapsed) section.classList.add('collapsed');
+
+      const header = el('button', 'lib-section-head');
+      header.appendChild(el('span', 'lib-section-caret', collapsed ? '▸' : '▾'));
+      header.appendChild(el('span', 'lib-section-name', cat || 'Uncategorized'));
+      header.appendChild(el('span', 'lib-section-count', String(entries.length)));
+      header.addEventListener('click', () => this._toggleCategory(cat));
+      section.appendChild(header);
+
+      const body = el('div', 'lib-section-body');
+      for (const entry of entries) body.appendChild(this._renderLibRow(entry));
+      section.appendChild(body);
+
+      this.libList.appendChild(section);
+    }
+  }
+
+  // One Library row: name + clone/delete, then a meta line of kind/protected badges, node count,
+  // and the editable Category chip (click to type a Category, with autocomplete suggestions).
+  _renderLibRow(entry) {
+    const row = el('div', 'lib-item');
+    if (entry.id === this.currentId) row.classList.add('active');
+    row.addEventListener('click', () => { if (entry.id !== this.currentId) this.setFlow(entry.id); });
+
+    // Top line: the Flow name, plus a delete button (Protected Flows can't be deleted).
+    const top = el('div', 'lib-item-top');
+    const name = el('span', 'lib-name', entry.name);
+    name.title = 'Double-click to rename';
+    name.addEventListener('dblclick', (e) => { e.stopPropagation(); this._renameFlow(entry.id, name); });
+    top.appendChild(name);
+    // Clone is offered for every Flow — including Protected ones, since duplicating is the
+    // only way to get an editable copy of a Protected Flow.
+    const clone = el('button', 'lib-clone', '⧉');
+    clone.title = 'Duplicate this Flow';
+    clone.addEventListener('click', (e) => { e.stopPropagation(); this._cloneFlow(entry.id); });
+    top.appendChild(clone);
+    if (!entry.protected) {
+      const del = el('button', 'lib-delete', '✕');
+      del.title = 'Delete this Flow';
+      del.addEventListener('click', (e) => { e.stopPropagation(); this._deleteFlow(entry.id); });
+      top.appendChild(del);
+    }
+    row.appendChild(top);
+
+    // Meta line: kind / protected badges + node count + the editable Category chip.
+    const meta = el('div', 'lib-meta');
+    meta.appendChild(el('span', `lib-kind kind-${entry.model.targetKind}`, this._kindLabel(entry.model)));
+    if (entry.protected) meta.appendChild(el('span', 'lib-protected', 'Protected'));
+    const count = entry.model.nodes.length;
+    meta.appendChild(el('span', 'lib-count', `${count} node${count === 1 ? '' : 's'}`));
+    const cat = el('button', 'lib-category', entry.category || '+ Category');
+    if (!entry.category) cat.classList.add('unset');
+    cat.title = 'Click to set this Flow’s Category';
+    cat.addEventListener('click', (e) => { e.stopPropagation(); this._editCategory(entry.id, cat); });
+    meta.appendChild(cat);
+    row.appendChild(meta);
+
+    return row;
+  }
+
+  // Fold a Category section open/shut. Uncategorized is keyed by '' (see _renderLibrary). The
+  // preference is per-view, so it persists on its own and re-renders without touching Library data.
+  _toggleCategory(cat) {
+    if (this._collapsedCats.has(cat)) this._collapsedCats.delete(cat);
+    else this._collapsedCats.add(cat);
+    saveCollapsed(this._collapsedCats);
+    this._renderLibrary();
+  }
+
+  // Inline Category editor: swap the chip for a text input backed by the suggestions datalist.
+  // Committing writes through library.setCategory (a blank clears it back to Uncategorized).
+  _editCategory(id, chipEl) {
+    const entry = this.library.get(id);
+    const input = el('input', 'lib-category-input');
+    input.value = entry.category || '';
+    input.placeholder = 'Category';
+    input.setAttribute('list', 'lib-category-suggestions');
+    chipEl.replaceWith(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const commit = (save) => {
+      if (done) return;
+      done = true;
+      if (save) {
+        this.library.setCategory(id, input.value);
+        this.library.save();
+      }
+      this._renderLibrary();
+    };
+    input.addEventListener('click', (e) => e.stopPropagation());
+    input.addEventListener('blur', () => commit(true));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') commit(true);
+      if (e.key === 'Escape') commit(false);
+    });
   }
 
   // Delete a Flow from the Library (Protected Flows are spared). If it was the edited Flow, fall
@@ -890,6 +985,22 @@ function el(tag, className, text) {
   if (className) node.className = className;
   if (text != null) node.textContent = text;
   return node;
+}
+
+// Collapsed Library Category sections persist as a plain list of names (Uncategorized is ''), kept
+// apart from the Library data since folding is a view preference, not part of any Flow (CONTEXT.md).
+const COLLAPSED_KEY = 'flow-rts.lib-collapsed.v1';
+
+function loadCollapsed() {
+  try {
+    const raw = localStorage.getItem(COLLAPSED_KEY);
+    if (raw) return new Set(JSON.parse(raw));
+  } catch { /* unavailable or corrupt — start with all sections open */ }
+  return new Set();
+}
+
+function saveCollapsed(set) {
+  try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...set])); } catch { /* quota/full */ }
 }
 
 function paramText(param, value) {

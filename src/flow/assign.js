@@ -80,7 +80,28 @@ export function openAssignOverlay(unit, library, targetKind, onAssigned, buildin
     empty.textContent = `No ${kindLabel} Flows yet. Open the Flow editor (F) to create one.`;
     list.appendChild(empty);
   } else {
-    for (const entry of flows) addRow(entry.id, entry.protected ? `${entry.name}  [Protected]` : entry.name);
+    // Group by Category to match the editor's Library panel (CONTEXT.md): sections sorted
+    // alphabetically with Uncategorized last. A single section (the common case) still reads fine.
+    const buckets = new Map(); // category ('' = Uncategorized) -> entries
+    for (const entry of flows) {
+      const cat = entry.category || '';
+      if (!buckets.has(cat)) buckets.set(cat, []);
+      buckets.get(cat).push(entry);
+    }
+    const cats = [...buckets.keys()].sort((a, b) => {
+      if (a === '') return 1;
+      if (b === '') return -1;
+      return a.localeCompare(b);
+    });
+    for (const cat of cats) {
+      const head = document.createElement('div');
+      head.className = 'assign-section';
+      head.textContent = cat || 'Uncategorized';
+      list.appendChild(head);
+      for (const entry of buckets.get(cat)) {
+        addRow(entry.id, entry.protected ? `${entry.name}  [Protected]` : entry.name);
+      }
+    }
   }
 
   panel.appendChild(list);
