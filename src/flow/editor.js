@@ -487,11 +487,29 @@ export class FlowEditor {
         buildableBuildings().map((b) => ({ value: b.id, label: b.label })));
     if (param.type === 'buildingFlowRef')
       return this._selectParam(node, param, this._buildingFlowOptions(node));
+    if (param.type === 'boolean') return this._booleanParam(node, param);
     const row = el('div', 'param-row');
     row.appendChild(el('span', 'param-label', param.label));
     row.appendChild(
       param.type === 'number' ? this._numberInput(node, param) : this._tileButton(node, param),
     );
+    return row;
+  }
+
+  // A 'boolean' Parameter: a checkbox (e.g. OnTimer's 'repeat', docs/adr/0019). Unset falls back to
+  // the param's `default`, so a freshly-dropped node reads as its intended default until toggled.
+  _booleanParam(node, param) {
+    const row = el('div', 'param-row');
+    const input = el('input', 'param-checkbox');
+    input.type = 'checkbox';
+    const current = node.params && node.params[param.id];
+    input.checked = current == null ? !!param.default : !!current;
+    input.addEventListener('pointerdown', (e) => e.stopPropagation());
+    input.addEventListener('change', () => {
+      this.commit((m) => m.setParam(node.id, param.id, input.checked));
+    });
+    row.appendChild(el('span', 'param-label', param.label));
+    row.appendChild(input);
     return row;
   }
 

@@ -474,6 +474,7 @@
   text-align: right;
 }
 .param-input:focus { outline: none; border-color: #5b97e8; background: #314350; }
+.param-checkbox { width: 15px; height: 15px; accent-color: #5b97e8; cursor: pointer; }
 
 .param-condition { display: flex; flex-direction: column; gap: 6px; }
 .param-args { display: flex; flex-direction: column; gap: 6px; }

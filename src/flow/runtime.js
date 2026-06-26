@@ -1,14 +1,20 @@
-// The Flow interpreter: walks a Flow's node graph and advances a Unit's Run. It is
+// The Flow interpreter: walks a Flow's node graph and advances a Runner's Run. It is
 // engine-agnostic — it imports nothing from Phaser and never touches a sprite. Anything a
 // node needs to DO in (or ASK of) the game world goes through the injected `world` context,
-// which MapScene implements against Phaser. See CONTEXT.md (Run) and docs/adr/0005, 0006.
+// which MapScene implements against Phaser. See CONTEXT.md (Run, Frame, Interrupt) and
+// docs/adr/0005, 0006, 0019.
 //
-// A Run is `{ flowId, current, status }`: `current` is the id of the node the cursor sits on
-// and `status` is 'running' | 'idle' | 'halted'. The cursor reads the LIVE model each tick,
-// so edits to the shared Flow definition take effect as the Unit advances; if the current
-// node is deleted, the Run halts. A Run carries a scratch `state` object for the node the
-// cursor currently sits on (reset each time it advances) — Move is stateless and ignores it,
-// but Wait accumulates elapsed time there.
+// A Run is a STACK of Frames (docs/adr/0019). The active (top) Frame lives directly on the Run as
+// `{ current, state }` — `current` is the id of the node the cursor sits on, `state` its scratch —
+// so the rest of the app reads the running cursor exactly as it always has. Suspended Frames
+// beneath it live in `run.stack` (each `{ current, state, interrupt }`, bottom-first), and
+// `run.timers` holds a per-Interrupt clock keyed by node id. `status` is 'running' | 'idle' |
+// 'halted'. The active Frame reads the LIVE model each tick, so edits take effect as the Runner
+// advances; deleting the active node discards that Frame and resumes the one beneath (ADR-0005,
+// 0019). An Interrupt (OnTimer) coming due suspends the active Frame — the world halts its
+// in-flight movement/combat — and pushes a handler Frame; when that handler's chain ends the Frame
+// is popped and the suspended Frame resumes exactly where it froze (freeze-and-continue). A Run
+// outlives its base line: it stays armed (running, no active Frame) while any Interrupt can fire.
 
 // Each executor runs one node and reports back: either still RUNNING (wait for next frame,
 // keep the cursor here) or DONE with the Exec output port to follow. Keyed by node kind so
@@ -17,8 +23,10 @@ const RUNNING = { status: 'running' };
 const done = (out = 'out') => ({ status: 'done', out });
 
 const EXECUTORS = {
-  // Events have no effect — they are entry points. Fire and advance.
+  // Events have no effect — they are entry points. Fire and advance into whatever they wire to.
+  // OnStart roots the base Frame; OnTimer roots a pushed interrupt-handler Frame (docs/adr/0019).
   OnStart: () => done(),
+  OnTimer: () => done(),
 
   // Glide toward the destination Tile; hold the cursor until arrival. An unset destination
   // is a valid authoring state (ADR-0004) — treat it as a no-op and advance immediately.
@@ -150,37 +158,154 @@ const EXECUTORS = {
   Branch: (node, runner, world) => done(world.test(runner, node.params || {}) ? 'yes' : 'no'),
 };
 
-// Begin a Run at the Flow's OnStart Event. With a single cursor we take the first OnStart;
-// a Flow with none starts idle (nothing to run). See docs/adr/0005.
-export function startRun(flowId, model) {
-  const onStart = model.nodes.find((n) => n.kind === 'OnStart');
-  return onStart
-    ? { flowId, current: onStart.id, status: 'running', state: {} }
-    : { flowId, current: null, status: 'idle', state: {} };
+// Interrupt predicates (docs/adr/0019), keyed by node kind like EXECUTORS. Each advances its own
+// per-Run clock `t = { elapsed, fired }` and reports whether the Interrupt is due THIS frame. The
+// firing loop owns the cross-cutting rules — pausing the clock while the Interrupt's own handler is
+// live, ignoring an unwired Interrupt, resetting on fire — so a predicate only decides timing.
+// OnTimer fires once `delay` seconds have elapsed; with `repeat` off (default on) it fires once.
+const INTERRUPTS = {
+  OnTimer: (node, t, dt) => {
+    const repeat = node.params?.repeat !== false; // default: repeating
+    if (!repeat && t.fired) return false;         // spent one-shot
+    const delayMs = (node.params?.delay || 0) * 1000;
+    if (delayMs <= 0) return false;               // unset/zero delay is inert (ADR-0004)
+    t.elapsed += dt;
+    return t.elapsed >= delayMs;
+  },
+};
+
+// Cap on stacked handler Frames: a safety valve against two fast Interrupts piling up faster than
+// their handlers pop (docs/adr/0019), mirroring tickRun's maxSteps guard on instant cycles.
+const MAX_STACK_DEPTH = 32;
+
+// An Interrupt only fires if its Exec output leads somewhere; an unwired Interrupt is inert
+// (docs/adr/0019) — firing it would suspend-and-resume the Runner for no behaviour.
+const hasHandler = (model, node) => model.connections.some((c) => c.from.node === node.id);
+
+// The Interrupt node ids whose handler Frame is currently live (the active Frame plus any suspended
+// one). Their clocks are PAUSED — "every N seconds" counts time NOT spent handling that Interrupt,
+// so a handler outlasting its own period neither self-stacks nor instantly re-fires.
+function liveInterruptIds(run) {
+  const ids = new Set();
+  if (run.activeInterrupt) ids.add(run.activeInterrupt);
+  for (const f of run.stack) if (f.interrupt) ids.add(f.interrupt);
+  return ids;
 }
 
-// Advance `run` for one frame. Instantaneous nodes chain within the same tick; a node that
-// returns RUNNING (Move in flight) stops the tick with the cursor parked on it. Reaching a
-// node with nothing wired to the followed Exec output completes the Run (idle). A missing
-// current node — deleted by a live edit — halts the Run. `maxSteps` guards against a future
-// instant-only cycle spinning forever in one frame.
+// Could any Interrupt still fire? A repeating one always can; a one-shot only until it has fired.
+// Decides whether a Run with an empty stack stays armed (running) or is genuinely finished.
+function anyArmable(run, model) {
+  return model.nodes.some((n) => {
+    if (!INTERRUPTS[n.kind] || !hasHandler(model, n)) return false;
+    if (n.params?.repeat !== false) return true; // repeating
+    return !run.timers[n.id]?.fired;             // one-shot not yet spent
+  });
+}
+
+// Suspend the active Frame onto the stack and make `node` (an Interrupt) the new active Frame. The
+// world halts the suspended Frame's in-flight movement/combat intent (docs/adr/0019): the Runner
+// goes still until the handler moves it, and resume re-asserts intent because executors re-issue it
+// every tick. With no active Frame (an armed, base-line-finished Run) there is nothing to suspend.
+function pushHandler(run, node, runner, world) {
+  if (run.current != null) {
+    run.stack.push({ current: run.current, state: run.state, interrupt: run.activeInterrupt });
+  }
+  world.suspendRunner?.(runner);
+  run.current = node.id;
+  run.state = {};
+  run.activeInterrupt = node.id;
+}
+
+// Resume the Frame beneath the active one, restoring its frozen cursor + scratch (freeze-and-
+// continue). Returns false when the stack is empty (nothing to resume).
+function popFrame(run) {
+  const f = run.stack.pop();
+  if (!f) return false;
+  run.current = f.current;
+  run.state = f.state;
+  run.activeInterrupt = f.interrupt;
+  return true;
+}
+
+// Advance every Interrupt's clock and push a handler Frame for each that comes due, in model order
+// so simultaneous firings stack deterministically (docs/adr/0019). Runs before the active Frame is
+// stepped, so a freshly-fired handler executes the same tick.
+function fireDueInterrupts(run, runner, model, world, dt) {
+  const live = liveInterruptIds(run);
+  for (const node of model.nodes) {
+    const pred = INTERRUPTS[node.kind];
+    if (!pred) continue;
+    const t = run.timers[node.id] || (run.timers[node.id] = { elapsed: 0, fired: false });
+    if (live.has(node.id)) continue;        // clock paused while its own handler is live
+    if (!hasHandler(model, node)) continue; // unwired Interrupt is inert
+    if (!pred(node, t, dt)) continue;
+    t.elapsed = 0;
+    t.fired = true;
+    if (run.stack.length >= MAX_STACK_DEPTH) continue; // safety valve: drop the fire, retry later
+    pushHandler(run, node, runner, world);
+  }
+}
+
+// End the active Frame when its chain runs out or its node was deleted with nothing beneath. The
+// Run does not die while an Interrupt can still fire — it goes ARMED (running, no active Frame),
+// waiting to service the next one (docs/adr/0019). Otherwise it is idle (finished normally) or
+// halted (a live node was deleted) — the distinction the inspector surfaces.
+function endActive(run, model, byDeletion) {
+  run.current = null;
+  run.state = {};
+  run.activeInterrupt = null;
+  if (anyArmable(run, model)) run.status = 'running';
+  else run.status = byDeletion ? 'halted' : 'idle';
+}
+
+// Begin a Run. The base Frame starts at the Flow's first OnStart (docs/adr/0005); OnStart is now
+// optional (docs/adr/0019) — a purely reactive Flow starts with no active Frame but stays armed if
+// any Interrupt can fire. A Flow with neither an OnStart nor an armable Interrupt is idle at once.
+export function startRun(flowId, model) {
+  const onStart = model.nodes.find((n) => n.kind === 'OnStart');
+  const run = {
+    flowId,
+    current: onStart ? onStart.id : null,
+    state: {},
+    status: 'running',
+    stack: [],
+    timers: {},
+    activeInterrupt: null,
+  };
+  if (!onStart && !anyArmable(run, model)) run.status = 'idle';
+  return run;
+}
+
+// Advance `run` one frame (docs/adr/0005, 0019). First fire any due Interrupts (which may push
+// handler Frames), then step the active Frame: instantaneous nodes chain within the tick; a node
+// that returns RUNNING parks the cursor; reaching a node with nothing wired ends the active Frame,
+// popping to the suspended Frame beneath (resume) or ending the Run; a deleted active node discards
+// its Frame the same way. `maxSteps` guards an instant-only cycle from spinning forever in a tick.
 export function tickRun(run, runner, model, world, dt) {
   if (!run || run.status !== 'running') return run;
 
+  fireDueInterrupts(run, runner, model, world, dt);
+
   let steps = 0;
-  const maxSteps = model.nodes.length + 1;
-  while (run.status === 'running') {
+  const maxSteps = model.nodes.length + run.stack.length + 2;
+  while (run.status === 'running' && run.current != null) {
     const node = model.getNode(run.current);
-    if (!node) { run.status = 'halted'; break; } // current node vanished under us
+    if (!node) {                            // active node vanished under a live edit (ADR-0005)
+      if (!popFrame(run)) { endActive(run, model, true); break; }
+      continue;                             // resume the Frame beneath and keep stepping
+    }
 
     const exec = EXECUTORS[node.kind] || done; // unknown/effectless kind: pass through
     const res = exec(node, runner, world, dt, run.state);
-    if (res.status === 'running') break; // park the cursor; resume next frame
+    if (res.status === 'running') break;    // park the cursor; resume next frame
 
     const conn = model.connections.find(
       (c) => c.from.node === node.id && c.from.port === res.out,
     );
-    if (!conn) { run.status = 'idle'; break; } // end of chain — Run complete
+    if (!conn) {                            // end of this Frame's chain
+      if (!popFrame(run)) { endActive(run, model, false); break; }
+      continue;                             // resumed Frame continues this tick
+    }
     run.current = conn.to.node;
     run.state = {}; // fresh scratch for the node just entered
     if (++steps > maxSteps) { run.status = 'idle'; break; }

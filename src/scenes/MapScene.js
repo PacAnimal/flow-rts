@@ -202,6 +202,14 @@ export class MapScene extends Phaser.Scene {
       build: (building, params) => this._build(building, params),
       claimBuildSlot: (unit) => this._claimBuildSlot(unit),
       construct: (unit, site, dt) => this._construct(unit, site, dt),
+      // An Interrupt preempting a Frame halts that Frame's in-flight intent (docs/adr/0019): drop
+      // any movement goal so the Runner stops in place and clear any combat stance, so the handler
+      // starts clean. Resuming re-asserts intent — Move/Hold/AttackMove re-issue it every tick — so
+      // this only needs to stop, not remember. A Building has neither, hence the feature guards.
+      suspendRunner: (runner) => {
+        if (runner.mv) this._movement.stop(runner);
+        if (runner.combat) runner.combat = null;
+      },
     };
 
     this._scenarioState = { time: 0, next: 0 }; // wave-clock cursor (docs/adr/0014)
@@ -1729,6 +1737,9 @@ void main(void){
     if (!run) return 'idle — paused or no Flow assigned';
     if (run.status === 'halted') return 'halted — current node was removed by an edit';
     if (run.status === 'idle') return 'idle — Flow finished';
+    // Armed but no active Frame: the base line ended and the Run is waiting to service its next
+    // Interrupt (docs/adr/0019). Still 'running', just nothing on the cursor right now.
+    if (run.current == null) return 'waiting for an interrupt';
     const node = this._resolveFlow(run.flowId)?.getNode(run.current);
     if (!node) return run.status;
     let title;

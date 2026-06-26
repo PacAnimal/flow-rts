@@ -21,6 +21,24 @@ export const NODE_KINDS = {
     ],
   },
 
+  OnTimer: {
+    kind: 'OnTimer',
+    category: 'event',
+    runner: 'any',
+    title: 'On Timer',
+    // An Interrupt Event (docs/adr/0019): once the Run has gone `delay` seconds it fires, suspending
+    // whatever the Run is doing, running this chain, then resuming where it left off. With `repeat`
+    // on (default) it fires every `delay` seconds — its clock pauses while its own handler runs, so
+    // the period counts time *between* handlings. Like every Event: an Exec out, no Exec in.
+    ports: [
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+    params: [
+      { id: 'delay', type: 'number', label: 'Seconds', min: 0, step: 0.5 },
+      { id: 'repeat', type: 'boolean', label: 'Repeat', default: true },
+    ],
+  },
+
   Move: {
     kind: 'Move',
     category: 'action',

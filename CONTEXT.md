@@ -51,12 +51,25 @@ _Avoid_: binding, attachment
 
 **Run**:
 A Runner's live execution of its assigned Flow — the *instance* to the Flow's *definition*.
-A Run holds where the Runner currently is within the Flow and is one of: running (working
-through the Flow), idle (no Flow, or the Flow finished), or halted (its current Node was
-removed by an edit). Distinct from the Assignment (which Flow) and the Flow (the shared
-definition): assigning a Flow starts a fresh Run; re-assigning discards the old one. A Run
-is per-Runner and momentary — it is not saved, so reloading restarts every Run from scratch.
+A Run is a **stack of Frames**: its bottom is the **base Frame** (the OnStart line, if any) and
+an Interrupt firing pushes a handler Frame on top. Only the top Frame advances; the rest are
+suspended beneath it. A Run is one of: running (a Frame is advancing, or the stack is empty but an
+Interrupt can still fire — OnStart is optional, so a purely reactive Flow stays armed), idle (no
+Flow, or the base line ended *and* nothing can ever fire again — every Interrupt is a spent
+one-shot, or there are none), or halted (the node a live Frame sits on was removed by an edit).
+A Run therefore outlives its base line: a repeating Interrupt keeps servicing the Runner after the
+main line is done, so such a Run is never idle while assigned. Distinct from the Assignment (which Flow) and the Flow (the shared definition): assigning
+a Flow starts a fresh Run; re-assigning discards the old one. A Run is per-Runner and momentary
+— it is not saved, so reloading restarts every Run from scratch.
 _Avoid_: process, thread, session, instance
+
+**Frame**:
+One cursor position within a Run's stack: the id of the Node it sits on plus that Node's
+in-progress scratch state. The **base Frame** is the bottom of the stack — the OnStart line, the
+Runner's main behaviour. An Interrupt firing pushes a handler Frame above it; when that handler's
+chain ends, its Frame is **popped** and the Frame beneath **resumes** exactly where it was
+(freeze-and-continue: its scratch state is untouched while suspended). Only the top Frame advances.
+_Avoid_: thread, coroutine, stack entry, level
 
 **Node**:
 A single box in a Flow. Every node has a kind: Event, Action, or Flow Control.
@@ -65,8 +78,19 @@ _Avoid_: block, box, step
 **Event**:
 A node kind that starts execution when something happens (e.g. OnStart, which fires once
 per Runner the moment its Flow begins running on that Runner — not a single global game start).
-An Event has an outgoing Exec port and no incoming Exec port — execution begins here.
+An Event has an outgoing Exec port and no incoming Exec port — execution begins here. OnStart
+roots the base Frame; an **Interrupt** is an Event that can fire *again* mid-Run and preempt.
 _Avoid_: trigger (reserved sense below), hook, signal
+
+**Interrupt**:
+An Event that fires *during* a Run (not just at the start) and preempts whatever the Run is
+doing. When an Interrupt fires it **suspends** the running Frame (the world halts that Frame's
+in-flight movement/combat intent) and pushes a handler Frame rooted at the Interrupt; the handler
+chain runs to its end, then its Frame is popped and the suspended Frame resumes. Interrupts stack:
+one firing while a handler already runs pushes above it (LIFO). OnTimer (fires after a delay) is
+the first Interrupt. Distinct from OnStart, which fires once and roots the base Frame rather than
+preempting.
+_Avoid_: trigger, hook, signal, exception
 
 **Action**:
 A node kind that performs an effect in the game when executed (e.g. Move). An Action has
