@@ -1,5 +1,5 @@
 import { TILE } from '../constants.js';
-import { attachHealth, drawHealthBar } from './runner.js';
+import { attachHealth } from './runner.js';
 import { FACTION } from '../units.js';
 
 // A Construction Site (CONTEXT.md, docs/adr/0018): a placed-but-unfinished Building. It is its own
@@ -45,9 +45,5 @@ export class ConstructionSite {
   // Fade from 60% transparent toward fully solid as the build nears completion (docs/adr/0018).
   syncVisual() {
     this.sprite.setAlpha(0.4 + 0.6 * this.progressFrac);
-  }
-
-  syncHealthBar() {
-    drawHealthBar(this, this._cx, this.sprite.y - this.sprite.displayHeight - 8, this.tileW * TILE * 0.7);
   }
 }

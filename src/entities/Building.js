@@ -1,5 +1,5 @@
 import { TILE } from '../constants.js';
-import { attachHealth, drawHealthBar } from './runner.js';
+import { attachHealth } from './runner.js';
 import { getBuildingType, FACTION } from '../units.js';
 
 export class Building {
@@ -30,10 +30,5 @@ export class Building {
     // Buildings are Runners too (CONTEXT.md): Faction + Health, destructible from the start.
     const def = getBuildingType(textureKey);
     attachHealth(this, def ? def.maxHealth : 1000, faction);
-  }
-
-  // Buildings don't move, so the bar is redrawn only when Health changes.
-  syncHealthBar() {
-    drawHealthBar(this, this._cx, this.sprite.y - this.sprite.displayHeight - 8, this.tileW * TILE * 0.7);
   }
 }

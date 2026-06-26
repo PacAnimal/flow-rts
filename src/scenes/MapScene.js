@@ -35,18 +35,6 @@ const UNIT_CLASS = { worker: Worker, marine: Marine, zapper: Zapper, reaper: Rea
 // Building type key → entity class, for raising a finished Building from a Construction Site (docs/adr/0018).
 const BUILDING_CLASS = { command_center: CommandCenter, barracks: Barracks, factory: Factory };
 
-// Label styles for units: name in light grey, running flow in electric blue.
-const LABEL_NAME_STYLE = {
-  fontFamily: 'system-ui, sans-serif', fontSize: '13px', color: '#b8bec8',
-  backgroundColor: 'rgba(0,0,0,0.55)', padding: { x: 5, y: 2 },
-};
-const LABEL_FLOW_STYLE = {
-  fontFamily: 'system-ui, sans-serif', fontSize: '13px', color: '#7df9ff',
-  backgroundColor: 'rgba(0,0,0,0.55)', padding: { x: 5, y: 2 },
-};
-// Building labels reuse the name style.
-const LABEL_STYLE = LABEL_NAME_STYLE;
-
 // Tiles kept clear of alloys/decorations around the command center, beyond its footprint,
 // so the start area stays open (docs/adr/0009).
 const START_CLEARANCE = 3;
@@ -104,6 +92,13 @@ export class MapScene extends Phaser.Scene {
   }
 
   create() {
+    // DOM overlay for labels and health bars — must be created before any units/buildings are
+    // registered, since _registerUnit/_registerBuilding append to it immediately.
+    const uiOverlay = document.createElement('div');
+    uiOverlay.style.cssText = 'position:fixed;inset:0;pointer-events:none;overflow:hidden';
+    document.body.appendChild(uiOverlay);
+    this._uiOverlay = uiOverlay;
+
     // The simulation starts paused: no Flow ticks and no Unit movement until START is pressed
     // (docs/adr/0005). Set before spawning Units so their Runs don't begin at assignment.
     this._running = false;
@@ -220,6 +215,7 @@ export class MapScene extends Phaser.Scene {
     this._buildStartButton();
     this._buildMaterialsPanel();
     this._buildBanner();
+
   }
 
   // Per-frame loop (docs/adr/0005, 0007): while running, tick every Run (a running Move sets
@@ -239,10 +235,51 @@ export class MapScene extends Phaser.Scene {
       this._movement.update(this.units, delta);
       this._updateScenario(delta);
 
-      for (const unit of this.units) this._placeUnit(unit);
-      for (const b of this.buildings) { b.syncHealthBar(); this._drawBuildingProgress(b); }
-      for (const s of this._sites) { s.syncHealthBar(); this._drawSiteProgress(s); } // construction (docs/adr/0018)
       this._checkObjective();
+    }
+
+    // DOM labels and health bars must track screen position every frame regardless of running state,
+    // since the camera can pan/zoom while paused.
+    const cam = this.cameras.main;
+    // Phaser camera matrix: screen = (world - scroll) * zoom + origin * (1 - zoom).
+    // The origin offset term is zero at zoom=1 but drifts otherwise — must include it.
+    const camOX = cam.width * cam.originX * (1 - cam.zoom);
+    const camOY = cam.height * cam.originY * (1 - cam.zoom);
+    for (const unit of this.units) this._placeUnit(unit, cam, camOX, camOY);
+    for (const b of this.buildings) {
+      this._drawBuildingProgress(b);
+      if (b._progressBar) b._progressBar.setScale(1 / cam.zoom);
+      if (b._ui) {
+        const hbTopY = b.sprite.y - b.sprite.displayHeight - 8;
+        const sx = (b._cx - cam.scrollX) * cam.zoom + camOX;
+        const sy = (hbTopY - cam.scrollY) * cam.zoom + camOY;
+        b._ui.el.style.left = sx + 'px';
+        b._ui.el.style.top = sy + 'px';
+        if (b.health > 0) {
+          b._ui.hbBg.style.display = '';
+          b._ui.hbFill.style.width = (b.health / b.maxHealth * 100) + '%';
+        } else {
+          b._ui.hbBg.style.display = 'none';
+        }
+      }
+    }
+
+    // Construction Sites track the camera the same way (docs/adr/0018): a Phaser progress bar in
+    // world space (kept screen-constant via 1/zoom) plus a DOM health bar positioned by transform.
+    for (const s of this._sites) {
+      this._drawSiteProgress(s);
+      if (s._progressBar) s._progressBar.setScale(1 / cam.zoom);
+      if (s._ui) {
+        const hbTopY = s.sprite.y - s.sprite.displayHeight - 8;
+        s._ui.el.style.left = ((s._cx - cam.scrollX) * cam.zoom + camOX) + 'px';
+        s._ui.el.style.top = ((hbTopY - cam.scrollY) * cam.zoom + camOY) + 'px';
+        if (s.health > 0) {
+          s._ui.hbBg.style.display = '';
+          s._ui.hbFill.style.width = (s.health / s.maxHealth * 100) + '%';
+        } else {
+          s._ui.hbBg.style.display = 'none';
+        }
+      }
     }
 
     // Push the inspected Runner's live cursor to the editor every frame — also while paused, so
@@ -283,7 +320,6 @@ export class MapScene extends Phaser.Scene {
     if (!target || target.health <= 0) return;
     const died = applyDamage(target, amount);
     this._log(`${target.label} takes ${amount} damage — Health: ${target.health}/${target.maxHealth}`);
-    target.syncHealthBar();
     if (died) {
       this._log(`${target.label} is destroyed`);
       // A Construction Site isn't a Runner (docs/adr/0018): tear it down its own way.
@@ -294,11 +330,9 @@ export class MapScene extends Phaser.Scene {
 
   _destroyRunner(runner) {
     runner._shadow?.destroy();
-    runner._healthBar?.destroy();
-    runner._progressBar?.destroy();
     runner.sprite?.destroy();
-    if (runner.labelNameText) runner.labelNameText.destroy();
-    if (runner.labelFlowText) runner.labelFlowText.destroy();
+    if (runner._ui) { runner._ui.el.remove(); runner._ui = null; }
+    if (runner._progressBar) { runner._progressBar.destroy(); runner._progressBar = null; }
     this._releaseClaim(runner); // a destroyed Worker frees its Deposit (docs/adr/0017)
     this._releaseBuildSlot(runner); // and its build slot at a Construction Site (docs/adr/0018)
     runner.run = null;
@@ -421,6 +455,34 @@ export class MapScene extends Phaser.Scene {
     return null;
   }
 
+  // Build the DOM label+health-bar cluster for a Runner. Appended to _uiOverlay and positioned
+  // each frame in world→screen space, so it is immune to camera zoom (outside Phaser pipeline).
+  _createRunnerUI(barW) {
+    const el = document.createElement('div');
+    el.style.cssText = 'position:absolute';
+
+    const labels = document.createElement('div');
+    labels.style.cssText = 'position:absolute;left:0;top:-2px;display:flex;flex-direction:column;align-items:center;gap:2px;transform:translate(-50%,-100%)';
+
+    const flowEl = document.createElement('div');
+    flowEl.style.cssText = 'font:13px/1.2 system-ui,sans-serif;color:#7df9ff;background:rgba(0,0,0,.55);padding:2px 5px;white-space:nowrap;display:none';
+
+    const nameEl = document.createElement('div');
+    nameEl.style.cssText = 'font:13px/1.2 system-ui,sans-serif;color:#b8bec8;background:rgba(0,0,0,.55);padding:2px 5px;white-space:nowrap';
+
+    labels.append(flowEl, nameEl);
+
+    const hbBg = document.createElement('div');
+    hbBg.style.cssText = `position:absolute;left:0;top:0;width:${barW}px;height:5px;background:#5a0000;transform:translateX(-50%);display:none`;
+
+    const hbFill = document.createElement('div');
+    hbFill.style.cssText = 'width:0;height:100%;background:#dd1111';
+
+    hbBg.appendChild(hbFill);
+    el.append(labels, hbBg);
+    return { el, labels, nameEl, flowEl, hbBg, hbFill };
+  }
+
   // Create a Unit of a type at a Tile, wire its label/selectability, and register it. Does not
   // start a Run — the caller assigns a Flow (player) or a data-authored model (Enemy) first.
   _createUnit(typeId, tx, ty, faction) {
@@ -430,9 +492,9 @@ export class MapScene extends Phaser.Scene {
     unit.label = `${getUnitType(typeId)?.label || typeId} ${this._nextUnitId++}`;
     unit.sprite.setInteractive({ useHandCursor: true });
     unit.sprite.setData('unit', unit);
-    const hbTopY0 = unit.y - unit._displaySize - 6;
-    unit.labelNameText = this.add.text(unit.x, hbTopY0 - 2, '', LABEL_NAME_STYLE).setOrigin(0.5, 1).setDepth(1e6);
-    unit.labelFlowText = this.add.text(unit.x, hbTopY0 - 2, '', LABEL_FLOW_STYLE).setOrigin(0.5, 1).setDepth(1e6).setVisible(false);
+    const ui = this._createRunnerUI(unit._displaySize * 0.8);
+    this._uiOverlay.appendChild(ui.el);
+    unit._ui = ui;
     this.units.push(unit);
     return unit;
   }
@@ -467,8 +529,12 @@ export class MapScene extends Phaser.Scene {
     const site = new ConstructionSite(this, tx, ty, def, faction);
     site.label = `${def.label} (site)`;
     site.assignFlowId = assignFlowId && flowLibrary.get(assignFlowId) ? assignFlowId : null;
+    // DOM label + health bar, like a Building's (the bar's the only damage cue while it builds).
+    const ui = this._createRunnerUI(def.tileW * TILE * 0.7);
+    this._uiOverlay.appendChild(ui.el);
+    ui.nameEl.textContent = site.label;
+    site._ui = ui;
     this._sites.push(site);
-    site.syncHealthBar();
     this._log(`Construction started: ${def.label} at (${tx}, ${ty})`);
   }
 
@@ -559,7 +625,7 @@ export class MapScene extends Phaser.Scene {
   _clearSite(site) {
     for (const u of site.builders) u._buildSlot = null;
     site.builders.clear();
-    site._healthBar?.destroy();
+    if (site._ui) { site._ui.el.remove(); site._ui = null; }
     site._progressBar?.destroy();
     site.sprite.destroy();
   }
@@ -618,7 +684,7 @@ export class MapScene extends Phaser.Scene {
     this._enemyFlows.set(id, model);
     unit.assignedFlowId = id;
     unit.run = startRun(id, model);
-    unit.labelNameText.setColor('#ff6b6b');
+    if (unit._ui) unit._ui.nameEl.style.color = '#ff6b6b';
     this._refreshUnitLabel(unit);
   }
 
@@ -1431,20 +1497,20 @@ void main(void){
     b.assignedFlowId = savedId && flowLibrary.get(savedId) ? savedId : null;
     b.sprite.setInteractive({ useHandCursor: true });
     b.sprite.setData('building', b);
-    // anchor labels to the health bar (sprite.y - displayHeight - 8), not to the tile top
-    const hbTopY = b.sprite.y - b.sprite.displayHeight - 8;
-    b.labelNameText = this.add.text(b._cx, hbTopY - 2, b.label, LABEL_NAME_STYLE).setOrigin(0.5, 1).setDepth(1e6);
-    b.labelFlowText = this.add.text(b._cx, hbTopY - 2 - b.labelNameText.height - 2, '', LABEL_FLOW_STYLE).setOrigin(0.5, 1).setDepth(1e6).setVisible(false);
+    const ui = this._createRunnerUI(b.tileW * TILE * 0.7);
+    this._uiOverlay.appendChild(ui.el);
+    b._ui = ui;
     this.buildings.push(b);
     this._refreshBuildingLabel(b);
-    b.syncHealthBar();
     this._startRun(b);
   }
 
   _refreshBuildingLabel(b) {
+    if (!b._ui) return;
     const entry = b.assignedFlowId ? flowLibrary.get(b.assignedFlowId) : null;
-    b.labelNameText?.setText(b.label);
-    b.labelFlowText?.setText(entry ? entry.name : '').setVisible(!!entry);
+    b._ui.nameEl.textContent = b.label;
+    b._ui.flowEl.textContent = entry ? entry.name : '';
+    b._ui.flowEl.style.display = entry ? '' : 'none';
   }
 
   // ── units ─────────────────────────────────────────────────────────────────
@@ -1522,28 +1588,25 @@ void main(void){
     unit.sprite.setInteractive({ useHandCursor: true });
     unit.sprite.setData('unit', unit);
 
-    const hbTopY0 = unit.y - unit._displaySize - 6;
-    unit.labelNameText = this.add.text(unit.x, hbTopY0 - 2, '', LABEL_NAME_STYLE).setOrigin(0.5, 1).setDepth(1e6);
-    unit.labelFlowText = this.add.text(unit.x, hbTopY0 - 2, '', LABEL_FLOW_STYLE).setOrigin(0.5, 1).setDepth(1e6).setVisible(false);
+    const ui = this._createRunnerUI(unit._displaySize * 0.8);
+    this._uiOverlay.appendChild(ui.el);
+    unit._ui = ui;
 
     this.units.push(unit);
     this._refreshUnitLabel(unit);
     unit.syncShadow();
-    unit.syncHealthBar();
     this._startRun(unit);
   }
 
   // Label above a Unit: its Flow name plus a Cargo readout (e.g. "Worker 1  ·  ◆20") so
   // gathering is observable until there's a real animation/HUD (docs/adr/0008).
   _refreshUnitLabel(unit) {
+    if (!unit._ui) return;
     const entry = unit.assignedFlowId ? flowLibrary.get(unit.assignedFlowId) : null;
-    const nameParts = [unit.label];
-    if (unit.cargo) {
-      const def = getResource(unit.cargo.type);
-      nameParts.push(`${def ? def.glyph : ''}${unit.cargo.amount}`);
-    }
-    unit.labelNameText?.setText(nameParts.join('  ·  '));
-    unit.labelFlowText?.setText(entry ? entry.name : '').setVisible(!!entry);
+    const cargo = unit.cargo ? `  ·  ${(() => { const def = getResource(unit.cargo.type); return (def ? def.glyph : '') + unit.cargo.amount; })()}` : '';
+    unit._ui.nameEl.textContent = `${unit.label}${cargo}`;
+    unit._ui.flowEl.textContent = entry ? entry.name : '';
+    unit._ui.flowEl.style.display = entry ? '' : 'none';
   }
 
   // (Re)start a Runner's Run from its assigned Flow's OnStart — Units and Buildings alike. Called
@@ -1712,18 +1775,28 @@ void main(void){
     this._banner.classList.remove('hidden');
   }
 
-  // Sync a Unit's sprite + label to its logical {x,y} (feet position), keeping depth = y so
+  // Sync a Unit's sprite + DOM label to its logical {x,y} (feet position), keeping depth = y so
   // it sorts correctly against trees/alloys/other Units.
-  _placeUnit(unit) {
+  _placeUnit(unit, cam, camOX, camOY) {
     if (unit._vel) unit.updateDirection(unit._vel.x, unit._vel.y);
     unit.sprite.setPosition(unit.x, unit.y);
     unit.sprite.setDepth(unit.y);
-    const hbTopY = unit.y - unit._displaySize - 6;
-    unit.labelNameText.setPosition(unit.x, hbTopY - 2);
-    unit.labelFlowText.setPosition(unit.x, hbTopY - 2 - unit.labelNameText.height - 2);
     unit.syncShadow();
-    unit.syncHealthBar();
     this._drawUnitProgress(unit);
+    if (unit._progressBar) unit._progressBar.setScale(1 / cam.zoom);
+    if (unit._ui) {
+      const hbTopY = unit.y - unit._displaySize - 6;
+      const sx = (unit.x - cam.scrollX) * cam.zoom + camOX;
+      const sy = (hbTopY - cam.scrollY) * cam.zoom + camOY;
+      unit._ui.el.style.left = sx + 'px';
+      unit._ui.el.style.top = sy + 'px';
+      if (unit.health > 0) {
+        unit._ui.hbBg.style.display = '';
+        unit._ui.hbFill.style.width = (unit.health / unit.maxHealth * 100) + '%';
+      } else {
+        unit._ui.hbBg.style.display = 'none';
+      }
+    }
   }
 
   // Draw a Worker's action progress bar above its head while it runs a timed Action — green for
@@ -1837,6 +1910,8 @@ void main(void){
       if (!drag) return;
       if (Math.abs(p.x - drag.ox) + Math.abs(p.y - drag.oy) > 3) this._dragMoved = true;
       cam.setScroll(drag.sx - (p.x - drag.ox), drag.sy - (p.y - drag.oy));
+      // clamp immediately so update() reads the real scroll before preRender() runs (docs/adr/0001)
+      if (cam.useBounds) { cam.scrollX = cam.clampX(cam.scrollX); cam.scrollY = cam.clampY(cam.scrollY); }
     });
     const endDrag = () => {
       // A click (no drag) in pick mode commits the hovered Tile.

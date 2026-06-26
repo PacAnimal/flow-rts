@@ -29,13 +29,13 @@
   font: 700 13px/1 system-ui, sans-serif;
   letter-spacing: 0.04em;
   color: #e8eef2;
-  background: #2f7d4f;
-  border: 1px solid #43a86a;
   border-radius: 6px;
   cursor: pointer;
+  background: #2f7d4f;
+  border: 1px solid #43a86a;
 }
 .sim-toggle:hover { background: #36915b; }
-.sim-toggle.running { background: #8a5a2b; border-color: #b3823f; }
+.sim-toggle.running { background: #8a5a2b; border-color: #b3843f; }
 .sim-toggle.running:hover { background: #9c6731; }
 
 /* Materials panel — player Stockpile readout, top-left. */
