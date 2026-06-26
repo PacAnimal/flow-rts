@@ -1,6 +1,8 @@
 // The dynamic movement layer (docs/adr/0007). Owns each Unit's movement: a cached terrain
 // Path (from pathfinding.js) plus per-frame steering — arrive-along-Path + separation from
-// neighbours, clamped to Walkable terrain, with an overlap-resolution pass. Phaser-free: it
+// neighbours, clamped to Walkable terrain, with an overlap-resolution pass. Separation carries
+// a tangential "pass on one side" bias and a priority asymmetry so converging Units slip past
+// each other instead of head-butting/oscillating (docs/adr/0007 amendment). Phaser-free: it
 // reads/writes plain {x,y} pixel positions on Unit objects and queries Walkable through an
 // injected predicate. MapScene constructs it and syncs sprites afterwards.
 
@@ -18,6 +20,17 @@ const ARRIVE_LOOSE = 0.85 * TILE;    // a forgiving arrival: "near enough" so Un
 const SLOW_RADIUS = 1.4 * TILE;      // begin easing speed near the destination
 const STUCK_MS = 700;                // no progress this long near the goal ⇒ settle (arrived)
 const STUCK_SPEED = SPEED * 0.12;    // below this counts as "not making progress"
+
+// Avoidance refinements over plain radial separation (docs/adr/0007 amendment). Pure radial
+// push only fires at contact range, so two Units meeting head-on crash then slide past instead
+// of anticipating. Three cheap additions make a meeting look planned:
+const LOOKAHEAD = 3.5 * TILE;        // anticipate a converging neighbour this far ahead and begin
+                                     // drifting aside early — long before the contact-range push
+const SEP_ANTICIPATE = 0.8;          // gain on that predictive sideways drift; rotating each Unit's
+                                     // away-vector a consistent way makes the pair pick opposite
+                                     // sides and pass cleanly rather than head-butting
+const YIELD_MORE = 1.6;             // when two *moving* Units meet, the one further from its goal
+const YIELD_LESS = 0.5;             // yields harder while the one closer to arriving holds its line
 
 // A Unit at Tile (tx,ty) stands at the Tile's bottom-centre (feet), matching where Units spawn.
 const standPoint = (tx, ty) => ({ x: (tx + 0.5) * TILE, y: (ty + 1) * TILE });
@@ -103,10 +116,21 @@ export class MovementSystem {
     this._resolveOverlaps(units);
   }
 
+  // Distance left to the goal for an *actively moving* Unit, else null (idle/arrived). Used to
+  // rank priority between two movers (docs/adr/0007 amendment) — idle Units stay outside the
+  // asymmetry so a crowd still shoves them aside as ADR-0007 intends.
+  _goalDist(unit) {
+    const mv = unit.mv;
+    if (!mv || !mv.path || mv.arrived) return null;
+    const g = mv.path[mv.path.length - 1];
+    return dist(unit.x, unit.y, g.x, g.y);
+  }
+
   // Desired velocity = arrive-along-Path (only while travelling) + separation (always).
   _steer(unit, units) {
     const topSpeed = unit.speed ?? SPEED;
     let vx = 0, vy = 0;
+    let dirx = 0, diry = 0;          // our normalised seek direction, for the tangential bias
     const mv = unit.mv;
 
     if (mv && mv.path && !mv.arrived) {
@@ -118,19 +142,53 @@ export class MovementSystem {
         const goal = mv.path[mv.path.length - 1];
         const dGoal = dist(unit.x, unit.y, goal.x, goal.y);
         const speed = dGoal < SLOW_RADIUS ? topSpeed * Math.max(0.15, dGoal / SLOW_RADIUS) : topSpeed;
-        vx += (tgt.x - unit.x) / d * speed;
-        vy += (tgt.y - unit.y) / d * speed;
+        dirx = (tgt.x - unit.x) / d;
+        diry = (tgt.y - unit.y) / d;
+        vx += dirx * speed;
+        vy += diry * speed;
       }
     }
 
+    const selfGoal = this._goalDist(unit);   // null ⇒ this Unit is idle/arrived (no priority claim)
+
     for (const other of units) {
       if (other === unit) continue;
-      const dx = unit.x - other.x, dy = unit.y - other.y;
+      const dx = unit.x - other.x, dy = unit.y - other.y;   // away-vector (other → us)
       const d = Math.hypot(dx, dy);
-      if (d > 0 && d < SEP_RANGE) {
+      if (d <= 0 || d >= LOOKAHEAD) continue;
+      const ux = dx / d, uy = dy / d;
+
+      // Priority asymmetry: only between two *moving* Units (docs/adr/0007 amendment). The one
+      // closer to its goal holds its line; the further one yields harder. This stops both Units
+      // dodging identically and oscillating. Idle/arrived Units keep symmetric separation.
+      const otherGoal = this._goalDist(other);
+      const bothMoving = selfGoal != null && otherGoal != null;
+      let yield_ = 1;
+      if (bothMoving) {
+        if (otherGoal < selfGoal) yield_ = YIELD_MORE;
+        else if (otherGoal > selfGoal) yield_ = YIELD_LESS;
+      }
+
+      // Contact-range radial separation: the base push-apart so Units never pile up.
+      if (d < SEP_RANGE) {
         const push = (1 - d / SEP_RANGE) * topSpeed;
-        vx += dx / d * push;
-        vy += dy / d * push;
+        vx += ux * push * yield_;
+        vy += uy * push * yield_;
+      }
+
+      // Predictive tangential drift (docs/adr/0007 amendment): for two converging movers, start
+      // veering aside well before contact. `ahead` is how far in front of our heading the neighbour
+      // sits; rotating the away-vector a consistent +90° gives opposing Units opposite tangents, so
+      // they commit to opposite sides early and the meeting reads as planned, not a last-instant
+      // slide. The drift ramps up as the gap closes and fades once the neighbour is no longer ahead.
+      if (bothMoving && (dirx || diry)) {
+        const ahead = -(dirx * ux + diry * uy);   // dot(seekDir, dirToOther); >0 ⇒ neighbour ahead
+        if (ahead > 0) {
+          const ramp = 1 - d / LOOKAHEAD;          // stronger the closer the converging Units get
+          const tan = ahead * ramp * SEP_ANTICIPATE * topSpeed * yield_;
+          vx += -uy * tan;
+          vy += ux * tan;
+        }
       }
     }
 

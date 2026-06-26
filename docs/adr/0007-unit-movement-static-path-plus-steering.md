@@ -48,3 +48,32 @@ Consequences:
 - CONTEXT.md gains **Path** and a reachability distinction on **Walkable**.
 - Deferred: flow-field group movement, RVO/ORCA, velocity smoothing/momentum, and richer
   repath/stuck-resolution. These can layer in without disturbing the static/dynamic split.
+
+## Amendment: tangential + priority refinement to separation
+
+Plain *radial* separation (push straight away from each neighbour, based only on current
+positions) reads badly in the one case it's exercised most: two friendly Units converging on the
+same destination. The push points roughly opposite their seek velocity, so they decelerate into
+each other and orbit/jitter, and because separation is symmetric they dodge the same way at the
+same instant and oscillate. Two cheap, local additions in `_steer` fix the feel without adopting
+full RVO/ORCA (still deferred above):
+
+1. **Predictive tangential bias.** Contact-range radial push alone fires too late — two Units
+   meeting head-on along one line crash, then slide past. So a *perpendicular* drift is applied
+   over a much longer look-ahead radius (`LOOKAHEAD`, several Tiles), scaled by how far ahead of
+   the Unit's heading the neighbour sits (`dot(seekDir, dirToOther)`) and ramped up as the gap
+   closes. The away-vector is rotated a *consistent* direction, so two opposing Units (opposite
+   away-vectors) receive opposite tangents and commit to opposite sides while still several Tiles
+   apart — the meeting reads as planned. Neighbours behind the heading get no tangent, and the
+   drift fades once the neighbour is no longer ahead. The radial push stays short-range
+   (`SEP_RANGE`) purely to stop Units piling up.
+2. **Priority asymmetry.** Between two *actively moving* Units, the one closer to its goal holds
+   its line while the further one yields harder (scales its separation up; the leader's down). This
+   breaks the both-yield symmetry that causes the wobble. The asymmetry applies **only** when both
+   Units are moving — idle/arrived Units keep plain symmetric separation, so a crowd still shoves
+   idle Units aside as the base decision intends.
+
+Both are pure tuning inside the existing steering pass (constants `LOOKAHEAD`, `SEP_ANTICIPATE`,
+`YIELD_MORE`, `YIELD_LESS`); the static/dynamic split and the world boundary are unchanged. This
+is still local steering, not RVO/ORCA — it has no formal collision-free guarantee, just enough
+anticipation to read well at this scale.
