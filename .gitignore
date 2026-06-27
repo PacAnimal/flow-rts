@@ -9,3 +9,7 @@ concepts/gen_portrait.py
 concepts/gen_model.py
 concepts/gen_texture.py
 concepts/gen_hq_model.py
+concepts/edit_portrait.py
+concepts/gen_marine_model.py
+concepts/gen_zapper_model.py
+concepts/gen_reaper_model.py

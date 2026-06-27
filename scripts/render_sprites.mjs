@@ -81,8 +81,9 @@ renderer.setSize(SIZE, SIZE);
 renderer.setPixelRatio(1);
 renderer.setClearColor(0x000000, 0);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.3;
+// Reinhard preserves hue fidelity — ACES aggressively desaturates blues/cyans
+renderer.toneMapping = THREE.ReinhardToneMapping;
+renderer.toneMappingExposure = 1.1;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -98,11 +99,12 @@ pmrem.dispose();
 
 const camera = new THREE.PerspectiveCamera(20, 1, 0.1, 200);
 
-const hemi = new THREE.HemisphereLight(0x8899bb, 0x443322, 0.8);
+const hemi = new THREE.HemisphereLight(0x8899bb, 0x443322, 0.4);
 scene.add(hemi);
 
-const key = new THREE.DirectionalLight(0xffddc8, 2.2);
-key.position.set(5, 8, 3);
+// front-angled key — more z than y so it hits the face, not the top of the head
+const key = new THREE.DirectionalLight(0xffddc8, 1.2);
+key.position.set(3, 3, 6);
 key.castShadow = true;
 key.shadow.mapSize.set(2048, 2048);
 key.shadow.camera.near = 0.1; key.shadow.camera.far = 30;
@@ -115,14 +117,18 @@ const rim = new THREE.DirectionalLight(0x3355aa, 0.6);
 rim.position.set(-3, 2, -5);
 scene.add(rim);
 
-// --- post-process: render scene to this target, then apply Sobel+posterize ---
-const renderTarget = new THREE.WebGLRenderTarget(SIZE, SIZE, { format: THREE.RGBAFormat });
 
-// Sobel edge detection + posterize — gives ink-outline + hand-painted banding
-// without replacing the PBR materials
+// --- post-process: two render targets ---
+// tDiffuse  = full PBR scene (lighting, shadows, IBL)
+// tAlbedo   = same scene rendered with MeshBasicMaterial (true texture colors, no lighting)
+// The shader picks the more-saturated version per pixel so flame blue survives warm lighting.
+const renderTarget = new THREE.WebGLRenderTarget(SIZE, SIZE, { format: THREE.RGBAFormat });
+const albedoTarget = new THREE.WebGLRenderTarget(SIZE, SIZE, { format: THREE.RGBAFormat });
+
 const postMat = new THREE.ShaderMaterial({
   uniforms: {
     tDiffuse:   { value: renderTarget.texture },
+    tAlbedo:    { value: albedoTarget.texture },
     resolution: { value: new THREE.Vector2(SIZE, SIZE) },
   },
   vertexShader: \`
@@ -131,12 +137,13 @@ const postMat = new THREE.ShaderMaterial({
   \`,
   fragmentShader: \`
     uniform sampler2D tDiffuse;
+    uniform sampler2D tAlbedo;
     uniform vec2 resolution;
     varying vec2 vUv;
 
     float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+    float saturation(vec3 c) { float mx = max(c.r,max(c.g,c.b)); float mn = min(c.r,min(c.g,c.b)); return mx - mn; }
 
-    // quantise to N discrete steps — keeps colour identity but bands the shading
     vec3 posterize(vec3 c, float steps) {
       return floor(c * steps + 0.5) / steps;
     }
@@ -146,7 +153,7 @@ const postMat = new THREE.ShaderMaterial({
       vec4 col = texture2D(tDiffuse, vUv);
       if (col.a < 0.01) { gl_FragColor = vec4(0.0); return; }
 
-      // Sobel kernel on luminance — detects both silhouette and internal panel edges
+      // Sobel on PBR render (has good luminance contrast for edges)
       float tl = luma(texture2D(tDiffuse, vUv + px * vec2(-1.,-1.)).rgb);
       float tc = luma(texture2D(tDiffuse, vUv + px * vec2( 0.,-1.)).rgb);
       float tr = luma(texture2D(tDiffuse, vUv + px * vec2( 1.,-1.)).rgb);
@@ -157,18 +164,38 @@ const postMat = new THREE.ShaderMaterial({
       float br = luma(texture2D(tDiffuse, vUv + px * vec2( 1., 1.)).rgb);
       float Gx = -tl - 2.*ml - bl + tr + 2.*mr + br;
       float Gy = -tl - 2.*tc - tr + bl + 2.*bc + br;
-      // higher threshold = thinner lines, only major geometry edges fire
       float edge = smoothstep(0.30, 0.65, sqrt(Gx*Gx + Gy*Gy));
 
-      // 12 steps — barely-visible banding, preserves most PBR smoothness
-      vec3 rgb = posterize(col.rgb, 12.0);
+      vec3 pbrRgb    = posterize(col.rgb, 12.0);
+      vec3 albedoRgb = posterize(texture2D(tAlbedo, vUv).rgb, 12.0);
 
-      // boost saturation so colours stay vivid
+      // flame rescue: only fires on pixels that are BOTH bright AND blue-leading in
+      // the albedo — this targets the pale sky-blue flame geometry specifically and
+      // ignores dark cybernetic accents, eyes, and other incidentally-blue surfaces
+      float albedoLum  = luma(albedoRgb);
+      float albedoBlueLead = albedoRgb.b - max(albedoRgb.r, albedoRgb.g);
+      float pbrSat     = saturation(pbrRgb);
+      float albedoSat  = saturation(albedoRgb);
+      float isFlame = smoothstep(0.40, 0.65, albedoLum)       // must be bright
+                    * smoothstep(0.05, 0.20, albedoBlueLead)  // must be clearly blue
+                    * smoothstep(0.0,  0.15, albedoSat - pbrSat); // albedo more saturated
+      float pbrLum = luma(pbrRgb);
+      vec3 flameColor = vec3(0.05, 0.30, 1.0) * pbrLum * 2.2;
+      flameColor = clamp(flameColor, 0.0, 1.0);
+      vec3 rgb = mix(pbrRgb, flameColor, isFlame);
+
+      // highlight compression on the final mix
+      float lum = luma(rgb);
+      float bluedom = smoothstep(0.0, 0.12, rgb.b - max(rgb.r, rgb.g));
+      float compress = mix(1.0, 0.55, smoothstep(0.55, 1.0, lum));
+      compress = mix(compress, 1.0, bluedom);
+      rgb *= compress;
+
+      // saturation boost
       float grey = luma(rgb);
-      rgb = mix(vec3(grey), rgb, 1.45);
+      rgb = mix(vec3(grey), rgb, 1.5);
       rgb = clamp(rgb, 0.0, 1.0);
 
-      // lighter ink lines
       rgb *= 1.0 - edge * 0.55;
 
       gl_FragColor = vec4(rgb, col.a);
@@ -224,7 +251,7 @@ window.loadModel = ({ glb, tex }) => new Promise((resolve, reject) => {
           metalnessMap:    metallicTex,
           metalness:       metallicTex  ? 1.0 : 0.3,
           roughness:       roughnessTex ? 1.0 : 0.8,
-          envMapIntensity: 1.0,
+          envMapIntensity: 0.3,
         });
       });
     } else {
@@ -233,7 +260,7 @@ window.loadModel = ({ glb, tex }) => new Promise((resolve, reject) => {
       model.traverse(obj => {
         if (!obj.isMesh) return;
         obj.castShadow = true; obj.receiveShadow = true;
-        if (obj.material) obj.material.envMapIntensity = 1.0;
+        if (obj.material) obj.material.envMapIntensity = 0.3;
       });
     }
 
@@ -283,10 +310,24 @@ function edgeClips(pixels) {
   return false;
 }
 
+// swap every mesh to MeshBasicMaterial (map only), render, restore
+function renderAlbedo() {
+  const saved = [];
+  scene.traverse(obj => {
+    if (!obj.isMesh) return;
+    saved.push({ obj, mat: obj.material });
+    obj.material = new THREE.MeshBasicMaterial({ map: obj.material.map || null, transparent: true, alphaTest: 0.01 });
+  });
+  renderer.setRenderTarget(albedoTarget);
+  renderer.render(scene, camera);
+  saved.forEach(({ obj, mat }) => { obj.material = mat; });
+}
+
 // render scene through the post-process pipeline to the canvas
 function renderFrame() {
   renderer.setRenderTarget(renderTarget);
   renderer.render(scene, camera);
+  renderAlbedo();
   renderer.setRenderTarget(null);
   renderer.render(quadScene, quadCam);
 }

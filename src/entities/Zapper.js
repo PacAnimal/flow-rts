@@ -4,6 +4,6 @@ import { FACTION } from '../units.js';
 
 export class Zapper extends Unit {
   constructor(scene, x, y, faction = FACTION.PLAYER) {
-    super(scene, x, y, 'zapper', TILE, faction, 3.8); // outpaces the Chojin so it can reach and bruise
+    super(scene, x, y, 'zapper', TILE, faction, 3.8, 16); // outpaces the Chojin so it can reach and bruise
   }
 }
