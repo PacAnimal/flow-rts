@@ -6,3 +6,6 @@ dist/
 __pycache__/
 *.pyc
 concepts/gen_portrait.py
+concepts/gen_model.py
+concepts/gen_texture.py
+concepts/gen_hq_model.py
