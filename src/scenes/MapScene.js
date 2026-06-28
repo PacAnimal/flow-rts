@@ -86,19 +86,22 @@ export class MapScene extends Phaser.Scene {
     this.load.image('barracks', '/sprites/barracks.png');
     this.load.image('factory', '/sprites/factory.png');
     // 8-direction units: individual texture per direction + dead sprite
-    const UNIT_TYPES_8 = ['worker', 'mech', 'tank', 'biter', 'chojin', 'heavy-chojin'];
+    const UNIT_TYPES_8 = ['worker', 'mech', 'tank', 'chojin', 'heavy-chojin'];
     const UNIT_DIRS    = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'dead'];
     for (const type of UNIT_TYPES_8)
       for (const d of UNIT_DIRS) this.load.image(`${type}_${d}`, `/sprites/${type}_${d}.png`);
 
-    // 16-direction animated units: 512px frames, 16 cols (dirs) × 6 rows (anim frames)
+    // 16-direction animated units: 256px frames, 16 cols (dirs) × N rows (anim frames)
     // frame index = animFrame * 16 + dirIndex
-    this.load.spritesheet('marine', '/sprites/marine_sheet.png', { frameWidth: 512, frameHeight: 512 });
+    this.load.spritesheet('marine', '/sprites/marine_sheet.png', { frameWidth: 256, frameHeight: 256 });
     this.load.image('marine_dead', '/sprites/marine_dead.png');
-    this.load.spritesheet('zapper', '/sprites/zapper_sheet.png', { frameWidth: 512, frameHeight: 512 });
+    this.load.spritesheet('zapper', '/sprites/zapper_sheet.png', { frameWidth: 256, frameHeight: 256 });
     this.load.image('zapper_dead', '/sprites/zapper_dead.png');
-    this.load.spritesheet('reaper', '/sprites/reaper_sheet.png', { frameWidth: 512, frameHeight: 512 });
+    this.load.spritesheet('reaper', '/sprites/reaper_sheet.png', { frameWidth: 256, frameHeight: 256 });
     this.load.image('reaper_dead', '/sprites/reaper_dead.png');
+    // biter: 256px frames, 16 dirs × 8 walk frames
+    this.load.spritesheet('biter', '/sprites/biter_sheet.png', { frameWidth: 256, frameHeight: 256 });
+    this.load.image('biter_dead', '/sprites/biter_dead.png');
     for (const key of DECORATIONS.tree.sprites) this.load.image(key, `/sprites/${key}.png`);
     for (const key of DECORATIONS.obstacle.sprites) this.load.image(key, `/sprites/decor2/${key}.png`);
     for (const key of DECORATIONS.groundDecor.sprites) this.load.image(key, `/sprites/decor2/${key}.png`);
