@@ -19,14 +19,17 @@ import { chromium } from '/opt/homebrew/lib/node_modules/playwright/index.mjs';
 import { readFileSync, writeFileSync } from 'fs';
 import { resolve, basename } from 'path';
 
-const [,, glbPath, sizeArg, outArg] = process.argv;
+const [,, glbPath, sizeArg, outArg, framesArg] = process.argv;
 if (!glbPath) {
-  console.error('Usage: node render_sprites.mjs <model.glb> [frameSize] [output.png]');
+  console.error('Usage: node render_sprites.mjs <model.glb> [frameSize] [output.png] [numAnimFrames]');
   process.exit(1);
 }
+const numAnimFrames = parseInt(framesArg || '1');
 
 const rawName = basename(glbPath, '.glb');
-const name = rawName === 'model'
+// for canonical filenames, derive identity from the parent dir
+const CANONICAL = ['model', 'retextured', 'animated', 'hand_animated'];
+const name = CANONICAL.includes(rawName)
   ? basename(resolve(glbPath, '..')).replace(/-(tpose|original|rigged|hq|t2t|raw)$/, '')
   : rawName;
 
@@ -270,7 +273,23 @@ window.loadModel = ({ glb, tex }) => new Promise((resolve, reject) => {
     const center = box.getCenter(new THREE.Vector3());
     const size   = box.getSize(new THREE.Vector3());
     model.position.sub(center);
-    model.scale.setScalar(0.5 / Math.max(size.x, size.y, size.z));
+    const modelExtent = 0.5 / Math.max(size.x, size.y, size.z);
+    model.scale.setScalar(modelExtent);
+    window.__baseModelY = model.position.y;
+
+    // set up AnimationMixer if the GLB has embedded animation clips
+    window.__mixer    = null;
+    window.__animClip = null;
+    if (gltf.animations && gltf.animations.length > 0) {
+      const clip = gltf.animations[0];
+      const mixer = new THREE.AnimationMixer(model);
+      const action = mixer.clipAction(clip);
+      action.play();
+      mixer.setTime(0);
+      window.__mixer    = mixer;
+      window.__animClip = clip;
+      console.log('Animation clip found:', clip.name, 'duration:', clip.duration.toFixed(2) + 's');
+    }
 
     const elev = 60 * Math.PI / 180;
     const d = 5.5;
@@ -332,16 +351,24 @@ function renderFrame() {
   renderer.render(quadScene, quadCam);
 }
 
-window.renderSheet = async () => {
-  // zoom pass — render directly to canvas so getPixels() can read it;
-  // post-process is skipped here since edge detection only needs alpha/transparency
+window.renderSheet = async (numFrames, isHover, cycleRange, rotOffset) => {
+  numFrames  = numFrames  || 1;
+  cycleRange = cycleRange ?? 1.0;
+  rotOffset  = rotOffset  || 0;
+
+  if (window.__animClip) {
+    console.log('clip:', window.__animClip.name, 'duration:', window.__animClip.duration.toFixed(3) + 's', 'cycleRange:', cycleRange.toFixed(3));
+  }
+
+  // zoom pass — bind/rest pose (t=0), render directly to canvas
+  if (window.__mixer) window.__mixer.setTime(0);
   const STEP = 1.05;
   let pass = 0;
   while (true) {
     let clips = false;
     for (let i = 0; i < 16; i++) {
-      model.rotation.y = i * 22.5 * Math.PI / 180;
-      renderer.setRenderTarget(null); // canvas, not renderTarget
+      model.rotation.y = rotOffset + i * 22.5 * Math.PI / 180;
+      renderer.setRenderTarget(null);
       renderer.render(scene, camera);
       if (edgeClips(getPixels())) { clips = true; break; }
     }
@@ -350,19 +377,57 @@ window.renderSheet = async () => {
     if (++pass > 200) break;
   }
 
-  // final pass — all 16 directions with full post-process
+  // animation frames — 16 directions × numFrames animation steps
   const frames = [];
-  for (let i = 0; i < 16; i++) {
-    model.rotation.y = i * 22.5 * Math.PI / 180;
-    renderFrame();
-    frames.push(capture2D());
+  const baseY = window.__baseModelY || 0;
+  for (let f = 0; f < numFrames; f++) {
+    // t ∈ [0, cycleRange) — for walk: covers one stride (1/3 of a 3-stride clip)
+    const t = (f / numFrames) * cycleRange;
+
+    if (numFrames > 1) {
+      if (window.__mixer && window.__animClip) {
+        // skeletal animation — position is fully driven by the baked clip; no extra bob here
+        window.__mixer.setTime(t * window.__animClip.duration);
+      } else {
+        // fallback: procedural animation (no rig in this GLB)
+        const amp = model.scale.x * 0.30;
+        const phase = (f / numFrames) * 2 * Math.PI;
+        if (isHover) {
+          // fly-forward cycle: Y-bob + pronounced forward lean (no z/y rotation = no spin)
+          model.position.y = baseY + Math.sin(phase) * amp;
+          model.rotation.x = 0.15 + Math.sin(phase) * 0.20; // leans forward, rocks back slightly
+        } else {
+          model.position.y = baseY + Math.sin(phase * 2) * amp;
+          model.rotation.z = Math.cos(phase) * 0.18;
+        }
+      }
+    }
+
+    for (let i = 0; i < 16; i++) {
+      model.rotation.y = rotOffset + i * 22.5 * Math.PI / 180;
+      renderFrame();
+      frames.push(capture2D());
+    }
   }
 
+  // reset pose
+  model.position.y = baseY;
+  if (window.__mixer) {
+    window.__mixer.setTime(0);
+  } else {
+    model.rotation.x = 0;
+    model.rotation.z = 0;
+  }
+
+  // sheet layout: 16 cols (directions) × numFrames rows (animation frames)
   const sheet = document.createElement('canvas');
-  sheet.width = 4 * SIZE; sheet.height = 4 * SIZE;
+  sheet.width = 16 * SIZE;
+  sheet.height = numFrames * SIZE;
   const ctx = sheet.getContext('2d');
-  for (let i = 0; i < 16; i++) {
-    ctx.drawImage(frames[i], (i % 4) * SIZE, Math.floor(i / 4) * SIZE);
+  for (let f = 0; f < numFrames; f++) {
+    for (let i = 0; i < 16; i++) {
+      ctx.drawImage(frames[f * 16 + i], i * SIZE, f * SIZE);
+    }
   }
 
   return sheet.toDataURL('image/png');
@@ -372,13 +437,24 @@ window.__threeReady = true;
 </script>
 </body></html>`);
 
+page.on('console', msg => console.log('[browser]', msg.text()));
+
 await page.waitForFunction(() => window.__threeReady === true, { timeout: 30_000 });
 await page.evaluate(({ glb, tex }) => window.loadModel({ glb, tex }), { glb: glbBase64, tex: texB64 });
 
-console.log(`Rendering ${name} — iterative edge-zoom, post-process (Sobel + posterize), 4×4 sheet...`);
-const sheetDataUrl = await page.evaluate(() => window.renderSheet(), { timeout: 180_000 });
+const isHover = name.includes('reaper');
+// walk: sample first 1/3 of the clip (Meshy walk clips have 3 strides — one stride = LLL+RRR)
+// hover: sample full clip — custom thrust cycle is already 1 thrust-and-recover period
+const cycleRange = isHover ? 1.0 : (1 / 3);
+const rotOffset  = 0;
+console.log(`Rendering ${name} — ${numAnimFrames} anim frame(s), 16 dirs, cycleRange=${cycleRange.toFixed(3)}, rotOffset=${rotOffset.toFixed(2)}, post-process...`);
+const sheetDataUrl = await page.evaluate(
+  ({ nf, ih, cr, ro }) => window.renderSheet(nf, ih, cr, ro),
+  { nf: numAnimFrames, ih: isHover, cr: cycleRange, ro: rotOffset }
+);
 await browser.close();
 
 writeFileSync(sheetPath, Buffer.from(sheetDataUrl.replace(/^data:image\/png;base64,/, ''), 'base64'));
-console.log(`\nDone → ${sheetPath}  (${frameSize}px × ${frameSize}px frames, ${4*frameSize}×${4*frameSize}px sheet)`);
-console.log(`Frame order (row-major): S SSE SE ESE | E ENE NE NNE | N NNW NW WNW | W WSW SW SSW`);
+const sheetW = 16 * frameSize, sheetH = numAnimFrames * frameSize;
+console.log(`\nDone → ${sheetPath}  (${frameSize}px frames, ${sheetW}×${sheetH}px sheet, ${numAnimFrames} anim frames × 16 dirs)`);
+console.log(`Frame index: animFrame * 16 + dirIndex  (dirs: S SSE SE ESE E ENE NE NNE N NNW NW WNW W WSW SW SSW)`);

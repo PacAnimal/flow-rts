@@ -91,7 +91,8 @@ export class MapScene extends Phaser.Scene {
     for (const type of UNIT_TYPES_8)
       for (const d of UNIT_DIRS) this.load.image(`${type}_${d}`, `/sprites/${type}_${d}.png`);
 
-    // 16-direction units: single sprite sheet (512×512 frames, 4×4 grid) + separate dead sprite
+    // 16-direction animated units: 512px frames, 16 cols (dirs) × 6 rows (anim frames)
+    // frame index = animFrame * 16 + dirIndex
     this.load.spritesheet('marine', '/sprites/marine_sheet.png', { frameWidth: 512, frameHeight: 512 });
     this.load.image('marine_dead', '/sprites/marine_dead.png');
     this.load.spritesheet('zapper', '/sprites/zapper_sheet.png', { frameWidth: 512, frameHeight: 512 });
@@ -113,6 +114,16 @@ export class MapScene extends Phaser.Scene {
     uiOverlay.style.cssText = 'position:fixed;inset:0;pointer-events:none;overflow:hidden';
     document.body.appendChild(uiOverlay);
     this._uiOverlay = uiOverlay;
+
+    const statsEl = document.createElement('div');
+    statsEl.style.cssText = 'position:absolute;right:12px;top:15%;text-align:right;font:bold 12px/1.7 monospace;color:#ffe600;text-shadow:1px 1px 3px #000';
+    const fpsLine   = document.createElement('div');
+    const unitsLine = document.createElement('div');
+    statsEl.append(fpsLine, unitsLine);
+    uiOverlay.appendChild(statsEl);
+    this._statsEl = statsEl;
+    this._fpsEl   = fpsLine;
+    this._unitsEl = unitsLine;
 
     // The simulation starts paused: no Flow ticks and no Unit movement until START is pressed
     // (docs/adr/0005). Set before spawning Units so their Runs don't begin at assignment.
@@ -269,7 +280,7 @@ export class MapScene extends Phaser.Scene {
       clearTimeout(this._titleCardT1);
       clearTimeout(this._titleCardT2);
       this._titleCard?.remove();
-      for (const el of [this._uiOverlay, this._toolbar, this._materialsPanel, this._upgradesPanel, this._banner]) {
+      for (const el of [this._uiOverlay, this._toolbar, this._materialsPanel, this._upgradesPanel, this._banner, this._statsEl]) {
         el?.remove();
       }
       if (this._onOverlayVisibility) {
@@ -297,6 +308,9 @@ export class MapScene extends Phaser.Scene {
 
       this._checkObjective();
     }
+
+    this._fpsEl.textContent   = `FPS: ${Math.min(30, Math.round(this.game.loop.actualFps))}`;
+    this._unitsEl.textContent = `Units: ${this.units.length}`;
 
     // DOM labels and health bars must track screen position every frame regardless of running state,
     // since the camera can pan/zoom while paused.
@@ -2095,8 +2109,12 @@ void main(void){
   // Sync a Unit's sprite + DOM label to its logical {x,y} (feet position), keeping depth = y so
   // it sorts correctly against trees/alloys/other Units.
   _placeUnit(unit, cam, camOX, camOY) {
-    if (unit._vel) unit.updateDirection(unit._vel.x, unit._vel.y);
-    unit.sprite.setPosition(unit.x, unit.y);
+    const dt   = this._running ? this.game.loop.delta : 0;
+    const spd  = unit._vel ? Math.hypot(unit._vel.x, unit._vel.y) : 0;
+    if (this._running) unit.updateDirection(unit._vel?.x ?? 0, unit._vel?.y ?? 0);
+    if (this._running && spd < 5) unit.idleRotateTick(dt);
+    const bobY = unit.tickBob ? unit.tickBob(dt) : 0;
+    unit.sprite.setPosition(unit.x, unit.y + bobY);
     unit.sprite.setDepth(unit.y);
     unit.syncShadow();
     this._drawUnitProgress(unit);

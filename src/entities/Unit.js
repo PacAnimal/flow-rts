@@ -1,5 +1,7 @@
 import { TILE, UNIT_SPEED } from '../constants.js';
 
+function randomIdleRotateInterval() { return (5 + Math.random() * 5) * 1000; }
+
 // 8-direction: clockwise from N, one texture per direction
 const DIRS8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
@@ -12,7 +14,7 @@ import { attachHealth } from './runner.js';
 import { getUnitType, FACTION } from '../units.js';
 
 export class Unit {
-  constructor(scene, x, y, texturePrefix, displaySize, faction = FACTION.PLAYER, speedTilesPerSec = UNIT_SPEED, dirCount = 8) {
+  constructor(scene, x, y, texturePrefix, displaySize, faction = FACTION.PLAYER, speedTilesPerSec = UNIT_SPEED, dirCount = 8, numAnimFrames = 1) {
     this.scene = scene;
     this.x = x;
     this.y = y;
@@ -21,6 +23,11 @@ export class Unit {
     this.speed = speedTilesPerSec * TILE;
     this._dirCount = dirCount;
     this._dir = 'S';
+    this._numAnimFrames = numAnimFrames;
+    this._animFrame = 0;
+    this._animTick  = 0;
+    this._animSpeed = 7; // game ticks per animation frame (~10fps at 60fps)
+    this._idleRotateTimer = randomIdleRotateInterval();
 
     // Unit type (CONTEXT.md): the texture prefix doubles as the type key into the data table.
     this.type = texturePrefix;
@@ -67,11 +74,32 @@ export class Unit {
     this.sprite.setScale(this._displaySize / natural);
   }
 
-  // update facing based on velocity vector (vx, vy); no-op when nearly stopped
+  // update facing based on velocity vector (vx, vy); advances walk animation when moving
   updateDirection(vx, vy) {
     const spd = Math.hypot(vx, vy);
-    if (spd < 5) return;
+    if (spd < 5) {
+      if (this._numAnimFrames > 1 && this._animFrame !== 0) {
+        this._animFrame = 0;
+        this._animTick  = 0;
+        this._syncAnimFrame();
+      }
+      return;
+    }
+    if (this._numAnimFrames > 1) {
+      if (++this._animTick >= this._animSpeed) {
+        this._animTick  = 0;
+        this._animFrame = (this._animFrame + 1) % this._numAnimFrames;
+        this._syncAnimFrame();
+      }
+    }
     this._faceVector(vx, vy);
+  }
+
+  _syncAnimFrame() {
+    if (this._dirCount === 16) {
+      this.sprite.setFrame(this._animFrame * 16 + FRAME16[this._dir]);
+      this._applyScale();
+    }
   }
 
   // Turn to face a world point (e.g. the Deposit being gathered or the Command Center being
@@ -97,10 +125,31 @@ export class Unit {
     if (dir === this._dir) return;
     this._dir = dir;
     if (this._dirCount === 16) {
-      this.sprite.setFrame(FRAME16[dir]);
+      this.sprite.setFrame(this._animFrame * 16 + FRAME16[dir]);
     } else {
       this.sprite.setTexture(`${this._texturePrefix}_${dir}`);
     }
     this._applyScale();
+  }
+
+  // Called each frame while the game is running and the unit is stationary.
+  // 1/3 chance to rotate one step left, one step right, or stay — every 5–10 s.
+  idleRotateTick(dt) {
+    this._idleRotateTimer -= dt;
+    if (this._idleRotateTimer > 0) return;
+    this._idleRotateTimer = randomIdleRotateInterval();
+    const roll = Math.random();
+    if      (roll < 1 / 3) this._rotateStep(-1);
+    else if (roll < 2 / 3) this._rotateStep(+1);
+  }
+
+  _rotateStep(delta) {
+    if (this._dirCount === 16) {
+      const idx = DIRS16.indexOf(this._dir);
+      if (idx !== -1) this.setDirection(DIRS16[((idx + delta) + 16) % 16]);
+    } else {
+      const idx = DIRS8.indexOf(this._dir);
+      if (idx !== -1) this.setDirection(DIRS8[((idx + delta) + 8) % 8]);
+    }
   }
 }

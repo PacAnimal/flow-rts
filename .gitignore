@@ -13,3 +13,8 @@ concepts/edit_portrait.py
 concepts/gen_marine_model.py
 concepts/gen_zapper_model.py
 concepts/gen_reaper_model.py
+scripts/gen_animations.py
+models/reaper/rigged.glb
+models/reaper/with_legs.glb
+models/*/animated.glb
+reaper-debug/
