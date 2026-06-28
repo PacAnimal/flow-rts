@@ -72,6 +72,24 @@ export const NODE_KINDS = {
     ],
   },
 
+  OnSignal: {
+    kind: 'OnSignal',
+    category: 'event',
+    runner: 'any',
+    title: 'On Signal',
+    // An Interrupt Event (docs/adr/0019, 0022) keyed to a Faction Signal: it fires on the Signal's
+    // rising edge — the moment another Runner (or this one) raises it with SetSignal — suspends the
+    // Run to handle it, then resumes. The reactive half of coordination: a Command Center raises
+    // `defend`; every Marine's OnSignal `defend` sends it home. Re-arms after each rising edge.
+    // An unset `name` is inert (ADR-0004). Like every Event: an Exec out, no Exec in.
+    ports: [
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+    params: [
+      { id: 'name', type: 'signalName', label: 'Signal' },
+    ],
+  },
+
   Move: {
     kind: 'Move',
     category: 'action',
@@ -253,6 +271,26 @@ export const NODE_KINDS = {
     ports: [
       { id: 'in', dir: 'in', type: 'exec', label: '' },
       { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+  },
+
+  SetSignal: {
+    kind: 'SetSignal',
+    category: 'action',
+    runner: 'any',
+    title: 'Set Signal',
+    // Raise or lower a Faction Signal (docs/adr/0022) — the write half of coordination, the partner
+    // to OnSignal / the signal_raised Condition. Instant: it sets the shared latch and advances.
+    // Raising a Signal already raised is a no-op (no fresh rising edge). An unset `name` is inert.
+    ports: [
+      { id: 'in', dir: 'in', type: 'exec', label: '' },
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+    // `value` raises (true, default) or lowers (false) the named Signal — rendered like OnTimer's
+    // `repeat` checkbox.
+    params: [
+      { id: 'name', type: 'signalName', label: 'Signal' },
+      { id: 'value', type: 'boolean', label: 'Raise', default: true },
     ],
   },
 

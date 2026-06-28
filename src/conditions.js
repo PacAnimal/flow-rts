@@ -57,6 +57,14 @@ export const CONDITIONS = {
     label: 'Own building exists',
     args: [{ id: 'buildingKind', type: 'buildingKind', label: 'Building' }],
   },
+
+  // Coordination Condition (docs/adr/0022): is a Faction Signal currently raised? The level (poll)
+  // half of Signals — gate a Branch on a standing alarm, where OnSignal reacts to its rising edge.
+  signal_raised: {
+    id: 'signal_raised',
+    label: 'Signal raised',
+    args: [{ id: 'name', type: 'signalName', label: 'Signal' }],
+  },
 };
 
 export function getCondition(id) {

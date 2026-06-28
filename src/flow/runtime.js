@@ -167,6 +167,14 @@ const EXECUTORS = {
     return world.attackMoveArrived(runner) ? done() : RUNNING;
   },
 
+  // Raise or lower a Faction Signal (docs/adr/0022), then advance — instant. The world owns the
+  // shared latch (and bumps the rising-edge counter OnSignal watches); an unset name no-ops there.
+  // `value` defaults to raise (true) when the param is unset, matching the descriptor default.
+  SetSignal: (node, runner, world) => {
+    world.setSignal(runner, node.params?.name, node.params?.value !== false);
+    return done();
+  },
+
   // Hold the cursor for `duration` seconds, accumulating elapsed time in the node's scratch
   // state. Unset or non-positive duration is a no-op (ADR-0004) — advance immediately.
   Wait: (node, runner, world, dt, state) => {
@@ -222,6 +230,20 @@ const INTERRUPTS = {
     if (until > lead) { t.armed = false; return false; }
     if (t.armed) return false;
     t.armed = true;
+    return true;
+  },
+
+  // OnSignal fires on a Faction Signal's rising edge (docs/adr/0022), watching the world's monotonic
+  // raise-count exactly as OnDamaged watches the Damage tally: arm at the current count on first
+  // sight (so a Signal already raised before this Run armed doesn't fire it), then fire whenever it
+  // advances. An unset `name` reads count 0 forever — inert (ADR-0004).
+  OnSignal: (node, t, dt, runner, world) => {
+    const name = node.params?.name;
+    if (!name) return false;
+    const seq = world.signalSeq ? world.signalSeq(runner, name) : 0;
+    if (t.seen === undefined) { t.seen = seq; return false; }
+    if (seq <= t.seen) return false;
+    t.seen = seq;
     return true;
   },
 };

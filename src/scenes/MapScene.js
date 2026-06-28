@@ -149,6 +149,11 @@ export class MapScene extends Phaser.Scene {
     // the player can afford an early Build before the first delivery lands (docs/adr/0018).
     this._stockpile = { alloys: 200 };
 
+    // Faction Signals (docs/adr/0022): a per-Faction blackboard of named booleans Runners raise and
+    // read to coordinate. `faction → (name → { raised, seq })`, where `seq` is a monotonic rising-edge
+    // count OnSignal watches. World state like the Stockpile — never saved; rebuilt fresh each create().
+    this._signals = new Map();
+
     // The player-wide Upgrade registry (docs/adr/0021): `done` is the set of researched Upgrade ids
     // (applied retroactively by _effectiveStats); `inProgress` maps an Upgrade id to the Building
     // researching it — a player-wide Claim (CONTEXT.md) so a second Building blocks rather than
@@ -256,6 +261,12 @@ export class MapScene extends Phaser.Scene {
         if (st.next >= SCENARIO.waves.length) return Infinity;
         return Math.max(0, SCENARIO.waves[st.next].at - st.time);
       },
+      // Faction Signals (docs/adr/0022): SetSignal writes, the signal_raised Condition reads the
+      // standing latch, and OnSignal watches the monotonic rising-edge count. All keyed by the
+      // Runner's Faction so Player and Enemy Flows never read each other's.
+      setSignal: (runner, name, raised) => this._setSignal(runner, name, raised),
+      signalRaised: (runner, name) => this._signal(runner, name).raised,
+      signalSeq: (runner, name) => this._signal(runner, name).seq,
       // Production (docs/adr/0013): a building-scoped Action ticked on a Building Runner.
       train: (building, params, state, dt) => this._train(building, params, state, dt),
       // Research (docs/adr/0021): a building-scoped Action that unlocks an Upgrade, mirroring Train.
@@ -1708,6 +1719,7 @@ void main(void){
       case 'unit_count':        return this._playerUnitCount(params.unitKind) >= (params.amount || 0);
       case 'building_exists':   return !!params.buildingKind && this.buildings.some(
                                   (b) => b.faction === FACTION.PLAYER && b.health > 0 && b.type === params.buildingKind);
+      case 'signal_raised':     return !!params.name && this._signal(unit, params.name).raised;
       default:                  return false;
     }
   }
@@ -1719,6 +1731,25 @@ void main(void){
     for (const t of this._targetsFor(unit))
       if (Math.hypot(unit.x - t.x, unit.y - t.y) - t.radius <= reach) return true;
     return false;
+  }
+
+  // The Signal record for `name` within a Runner's Faction (docs/adr/0022), created lowered on first
+  // read. `{ raised, seq }`; `seq` is bumped only on a rising edge so OnSignal fires once per raise.
+  _signal(runner, name) {
+    let byName = this._signals.get(runner.faction);
+    if (!byName) this._signals.set(runner.faction, (byName = new Map()));
+    let sig = byName.get(name);
+    if (!sig) byName.set(name, (sig = { raised: false, seq: 0 }));
+    return sig;
+  }
+
+  // Raise or lower a Faction Signal (docs/adr/0022). Bump the rising-edge `seq` only on lowered→raised
+  // so re-raising an already-raised Signal is a no-op (no fresh OnSignal fire). An unset name no-ops.
+  _setSignal(runner, name, raised) {
+    if (!name) return;
+    const sig = this._signal(runner, name);
+    if (raised && !sig.raised) sig.seq++;
+    sig.raised = !!raised;
   }
 
   // Count alive player Units, optionally of one type — backs the unit_count Condition. An unset
