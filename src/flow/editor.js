@@ -6,6 +6,7 @@
 
 import './editor.css';
 import { createStore } from './store.js';
+import { FlowModel } from './model.js';
 import { getNodeKind, getParams, getPort, nodeKindsForRunner } from './nodeKinds.js';
 import { CONDITIONS, getCondition } from '../conditions.js';
 import {
@@ -36,6 +37,16 @@ export class FlowEditor {
     this._onClose = null;
     this._activeNodeId = null;
     this._activeStatus = null;
+    // Full-editor canvas viewport: pan offset (screen px) + zoom. The node layer is transformed by
+    // this so large Flows can be navigated; wires re-measure from the laid-out DOM so they track it
+    // for free (the same trick the docked inspector's auto-fit uses). Identity = the legacy layout,
+    // so saved Flows authored before pan/zoom open exactly where they were.
+    this.viewport = { x: 0, y: 0, scale: 1 };
+    // Undo/redo: snapshots of model.toJSON() captured at the single mutation choke point (commit).
+    this._undoStack = [];
+    this._redoStack = [];
+    // The currently-selected node (click to select, Delete to remove). Cleared on flow switch.
+    this._selected = null;
     // Which Category sections are folded shut in the Library panel, by Category name (CONTEXT.md).
     // Purely a view preference, persisted on its own so it survives reloads without touching the
     // Library data; Uncategorized is keyed by the empty string.
@@ -45,6 +56,9 @@ export class FlowEditor {
     // subscription re-renders. subscribe fires once now (model is null → _render no-ops).
     this.store = createStore({ rev: 0 });
     this.store.subscribe(() => this._render());
+    // Editor-wide keyboard shortcuts (undo/redo, delete, deselect). Bound on window so they work
+    // wherever focus sits while the overlay is open; a no-op unless the editor is visibly authoring.
+    window.addEventListener('keydown', (e) => this._handleKey(e));
   }
 
   mount(parent = document.body) {
@@ -134,9 +148,20 @@ export class FlowEditor {
     // (docs/adr/0015), so it is rebuilt by _renderPalette whenever the Flow changes.
     const palette = el('div', 'flow-palette');
     palette.appendChild(el('h2', null, 'Nodes'));
+    // Legend for the category accent colours, which otherwise go unexplained (CONTEXT.md categories).
+    const legend = el('div', 'palette-legend');
+    for (const [cat, label] of [['event', 'Event'], ['action', 'Action'], ['control', 'Control']]) {
+      const item = el('span', `legend-item category-${cat}`);
+      item.appendChild(el('span', 'legend-swatch'));
+      item.appendChild(el('span', 'legend-label', label));
+      legend.appendChild(item);
+    }
+    palette.appendChild(legend);
     this.paletteList = el('div', 'palette-list');
     palette.appendChild(this.paletteList);
-    palette.appendChild(el('p', 'palette-hint', 'Drag a node onto the canvas. Drag port → port to connect.'));
+    palette.appendChild(el('p', 'palette-hint',
+      'Click or drag a node to add it. Drag port → port to connect. '
+      + 'Drag an exec output (or double-click empty space) to add the next node.'));
 
     // Canvas + wire layer
     this.canvasEl = el('div', 'flow-canvas');
@@ -168,15 +193,189 @@ export class FlowEditor {
     this.inspectBar.append(this.inspectLabel, this.inspectDetail, this.inspectClose);
     this.canvasEl.appendChild(this.inspectBar);
 
+    // Canvas toolbar (full editor only) — undo/redo, zoom, fit, auto-arrange. Hidden while docked
+    // or read-only via CSS, since the inspector auto-fits and forbids edits.
+    this._buildToolbar();
+
+    // Pan (drag empty canvas) + zoom (wheel), and double-click empty space to add a node. These
+    // run only in the full editor; the docked inspector auto-fits and stays static.
+    this.canvasEl.addEventListener('pointerdown', (e) => this._startPan(e));
+    this.canvasEl.addEventListener('wheel', (e) => this._onWheel(e), { passive: false });
+    this.canvasEl.addEventListener('dblclick', (e) => this._onCanvasDblClick(e));
+
     this.root.appendChild(libPanel);
     this.root.appendChild(palette);
     this.root.appendChild(this.canvasEl);
+  }
+
+  _buildToolbar() {
+    this.toolbar = el('div', 'flow-toolbar');
+    const mk = (text, title, fn, cls = '') => {
+      const b = el('button', `flow-tool ${cls}`.trim(), text);
+      b.title = title;
+      // Don't let a press on the toolbar start a canvas pan.
+      b.addEventListener('pointerdown', (e) => e.stopPropagation());
+      b.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
+      this.toolbar.appendChild(b);
+      return b;
+    };
+    const sep = () => this.toolbar.appendChild(el('span', 'flow-tool-sep'));
+    this.undoBtn = mk('↶', 'Undo (Ctrl+Z)', () => this.undo());
+    this.redoBtn = mk('↷', 'Redo (Ctrl+Shift+Z)', () => this.redo());
+    sep();
+    mk('−', 'Zoom out', () => this._zoomBy(1 / 1.2));
+    this.zoomLabel = mk('100%', 'Reset zoom to 100%', () => this._zoomBy(1 / this.viewport.scale), 'flow-zoom');
+    mk('+', 'Zoom in', () => this._zoomBy(1.2));
+    mk('Fit', 'Fit Flow to view', () => this._fitView(), 'flow-tool-text');
+    sep();
+    mk('Arrange', 'Auto-arrange nodes left → right', () => this._autoArrange(), 'flow-tool-text');
+    this.canvasEl.appendChild(this.toolbar);
+  }
+
+  // ── viewport: pan / zoom / fit (full editor only) ──────────────────────────
+
+  // Push the current pan+zoom onto the node layer. Wires are re-measured by the caller so they
+  // follow. In the docked inspector this is bypassed — _fitDocked owns the transform there.
+  _applyViewport() {
+    const v = this.viewport;
+    this.nodeLayer.style.transformOrigin = '0 0';
+    this.nodeLayer.style.transform = `translate(${v.x}px, ${v.y}px) scale(${v.scale})`;
+    if (this.zoomLabel) this.zoomLabel.textContent = `${Math.round(v.scale * 100)}%`;
+  }
+
+  // Convert a screen point to node-layer (model) coordinates, undoing the viewport transform.
+  _modelPoint(clientX, clientY) {
+    const p = this._canvasPoint(clientX, clientY);
+    const v = this.viewport;
+    return { x: (p.x - v.x) / v.scale, y: (p.y - v.y) / v.scale };
+  }
+
+  // Zoom by `factor`, keeping the point under (cx, cy) — default canvas centre — pinned in place.
+  _zoomBy(factor, cx, cy) {
+    if (this.docked || this.readOnly) return;
+    const r = this.canvasEl.getBoundingClientRect();
+    if (cx == null) { cx = r.left + r.width / 2; cy = r.top + r.height / 2; }
+    const v = this.viewport;
+    const next = clamp(v.scale * factor, 0.25, 2);
+    const p = this._canvasPoint(cx, cy);
+    v.x = p.x - (p.x - v.x) * (next / v.scale);
+    v.y = p.y - (p.y - v.y) * (next / v.scale);
+    v.scale = next;
+    this._applyViewport();
+    this._renderWires();
+  }
+
+  _onWheel(e) {
+    if (this.docked || this.readOnly || !this.model) return;
+    if (e.target.closest('.flow-node-menu, .flow-toolbar')) return;
+    e.preventDefault();
+    this._zoomBy(e.deltaY < 0 ? 1.1 : 1 / 1.1, e.clientX, e.clientY);
+  }
+
+  // Drag the empty canvas to pan. A press that doesn't move is treated as a click on empty space:
+  // it clears the node selection. Presses on a node / toolbar / menu are left to their own handlers.
+  _startPan(e) {
+    if (this.docked || this.readOnly || !this.model) return;
+    if (e.target.closest('.flow-node, .flow-toolbar, .flow-node-menu, .flow-inspect-bar')) return;
+    const startX = e.clientX, startY = e.clientY;
+    const v0 = { x: this.viewport.x, y: this.viewport.y };
+    let moved = false;
+    const move = (ev) => {
+      const dx = ev.clientX - startX, dy = ev.clientY - startY;
+      if (!moved && Math.hypot(dx, dy) > 3) { moved = true; this.canvasEl.classList.add('panning'); }
+      if (!moved) return;
+      this.viewport.x = v0.x + dx;
+      this.viewport.y = v0.y + dy;
+      this._applyViewport();
+      this._renderWires();
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      this.canvasEl.classList.remove('panning');
+      if (!moved) this._clearSelection();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }
+
+  // Double-click empty canvas → the add-node menu (no source: it just creates the node here).
+  _onCanvasDblClick(e) {
+    if (this.docked || this.readOnly || !this.model) return;
+    if (e.target.closest('.flow-node, .flow-toolbar, .flow-node-menu')) return;
+    this._openNodeMenu(e.clientX, e.clientY, this._modelPoint(e.clientX, e.clientY), null, null);
+  }
+
+  // Bounds of all laid-out nodes in model coords (top-left → bottom-right), or null if none.
+  _computeBounds() {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [id, nodeEl] of this.nodeEls) {
+      const n = this.model.getNode(id);
+      if (!n) continue;
+      minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x + nodeEl.offsetWidth);
+      maxY = Math.max(maxY, n.y + nodeEl.offsetHeight);
+    }
+    return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
+  }
+
+  // Frame the whole Flow in the viewport (clamped to ≤1× — never upscale past native). A no-op
+  // before the canvas has a measured size (e.g. called while still display:none).
+  _fitView() {
+    if (this.docked || !this.model) return;
+    const b = this._computeBounds();
+    if (!b) { this.viewport = { x: 0, y: 0, scale: 1 }; this._applyViewport(); this._renderWires(); return; }
+    const PAD = 40;
+    const availW = this.canvasEl.clientWidth - PAD * 2;
+    const availH = this.canvasEl.clientHeight - PAD * 2;
+    if (availW <= 0 || availH <= 0) return;
+    const spanX = Math.max(b.maxX - b.minX, 1), spanY = Math.max(b.maxY - b.minY, 1);
+    const scale = clamp(Math.min(availW / spanX, availH / spanY), 0.25, 1);
+    this.viewport = {
+      x: PAD + (availW - spanX * scale) / 2 - b.minX * scale,
+      y: PAD + (availH - spanY * scale) / 2 - b.minY * scale,
+      scale,
+    };
+    this._applyViewport();
+    this._renderWires();
+  }
+
+  // Auto-arrange: longest-path layering by exec connections, laid out left → right. Iterative
+  // relaxation (capped at node count) tolerates loop back-edges without spinning. One undoable edit.
+  _autoArrange() {
+    if (this.readOnly || !this.model || !this.model.nodes.length) return;
+    const layer = new Map(this.model.nodes.map((n) => [n.id, 0]));
+    for (let i = 0; i < this.model.nodes.length; i++) {
+      let changed = false;
+      for (const c of this.model.connections) {
+        const want = layer.get(c.from.node) + 1;
+        if (want > layer.get(c.to.node)) { layer.set(c.to.node, want); changed = true; }
+      }
+      if (!changed) break;
+    }
+    // Group by layer, keeping each column's existing top-to-bottom order roughly stable.
+    const cols = new Map();
+    for (const n of [...this.model.nodes].sort((a, b) => a.y - b.y)) {
+      const l = layer.get(n.id);
+      if (!cols.has(l)) cols.set(l, []);
+      cols.get(l).push(n.id);
+    }
+    const COL = 240, ROW = 150, X0 = 60, Y0 = 60;
+    this.commit((m) => {
+      for (const [l, ids] of cols) {
+        ids.forEach((id, row) => m.moveNode(id, X0 + l * COL, Y0 + row * ROW));
+      }
+    });
+    this._fitView();
   }
 
   // ── library ──────────────────────────────────────────────────────────────
 
   _newFlow(targetKind = 'unit', buildingType = null) {
     const entry = this.library.create(undefined, targetKind, buildingType);
+    // Seed every new Flow with an On Start node so the canvas is never a blank grid: it gives a
+    // first-time author the obvious entry point to chain from (every Run begins there — CONTEXT.md).
+    entry.model.addNode('OnStart', 80, 120);
     this.library.save();
     this.setFlow(entry.id);
     this._renderLibrary();
@@ -395,9 +594,86 @@ export class FlowEditor {
     this._exitInspect();
     this.currentId = id;
     this.model = entry.model;
+    // Undo history and selection are per-Flow; the viewport resets to identity so a switched-to
+    // Flow opens at its authored positions (use Fit to frame it).
+    this._undoStack = [];
+    this._redoStack = [];
+    this._selected = null;
+    this.viewport = { x: 0, y: 0, scale: 1 };
     this.flowName.textContent = `${entry.name}  ·  ${this._kindLabel(entry.model)} flow`;
     this._renderPalette();
     this._render();
+  }
+
+  // ── selection / undo / redo ────────────────────────────────────────────────
+
+  _select(id) {
+    if (this._selected === id) return;
+    this._clearSelection();
+    this._selected = id;
+    this.nodeEls.get(id)?.classList.add('selected');
+  }
+
+  _clearSelection() {
+    if (this._selected) this.nodeEls.get(this._selected)?.classList.remove('selected');
+    this._selected = null;
+  }
+
+  // Snapshot the model before a mutation. Capped so a long session doesn't grow without bound;
+  // any new edit invalidates the redo branch.
+  _pushUndo() {
+    this._undoStack.push(JSON.stringify(this.model.toJSON()));
+    if (this._undoStack.length > 50) this._undoStack.shift();
+    this._redoStack.length = 0;
+  }
+
+  undo() {
+    if (this.readOnly || !this.model || !this._undoStack.length) return;
+    this._redoStack.push(JSON.stringify(this.model.toJSON()));
+    this._restore(JSON.parse(this._undoStack.pop()));
+  }
+
+  redo() {
+    if (this.readOnly || !this.model || !this._redoStack.length) return;
+    this._undoStack.push(JSON.stringify(this.model.toJSON()));
+    this._restore(JSON.parse(this._redoStack.pop()));
+  }
+
+  // Replace the live model's contents in place (keeping the object identity the Library entry and
+  // any Runner Assignments hold), then persist + re-render through the normal reactive path.
+  _restore(json) {
+    const m = FlowModel.fromJSON(json);
+    this.model.nodes = m.nodes;
+    this.model.connections = m.connections;
+    this.model.targetKind = m.targetKind;
+    this.model.buildingType = m.buildingType;
+    this._clearSelection();
+    this.library.save();
+    this.store.update((s) => ({ rev: s.rev + 1 }));
+  }
+
+  _updateToolbar() {
+    if (this.undoBtn) this.undoBtn.disabled = !this._undoStack.length;
+    if (this.redoBtn) this.redoBtn.disabled = !this._redoStack.length;
+  }
+
+  // Editor-wide keyboard shortcuts. Inert unless visibly authoring, and never while typing in a
+  // field (so digits/Backspace in a Parameter input aren't hijacked).
+  _handleKey(e) {
+    if (!this.visible || this.readOnly || this.docked || !this.model) return;
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    const meta = e.ctrlKey || e.metaKey;
+    if (meta && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); e.shiftKey ? this.redo() : this.undo(); return; }
+    if (meta && (e.key === 'y' || e.key === 'Y')) { e.preventDefault(); this.redo(); return; }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && this._selected) {
+      e.preventDefault();
+      const id = this._selected;
+      this._selected = null;
+      this._removeNode(id);
+      return;
+    }
+    if (e.key === 'Escape') this._clearSelection();
   }
 
   // ── debug inspect (driven by MapScene) ─────────────────────────────────────
@@ -464,7 +740,10 @@ export class FlowEditor {
   // The single mutation path: apply a change to the model, persist it, then bump the store
   // so the subscription re-renders. Structural edits should go through here only — routing
   // every change through one place means no handler can forget to save or to re-render.
-  commit(mutator) {
+  commit(mutator, { snapshot = true } = {}) {
+    // Snapshot the pre-mutation state for undo (callers that take their own snapshot — the node
+    // drag, which mutates live before committing — pass snapshot:false to avoid a double entry).
+    if (snapshot) this._pushUndo();
     mutator(this.model);
     this.library.save();
     this.store.update((s) => ({ rev: s.rev + 1 }));
@@ -489,8 +768,12 @@ export class FlowEditor {
       if (!nodeEl) nodeEl = this._addNodeEl(node);
       nodeEl.style.transform = `translate(${node.x}px, ${node.y}px)`;
     }
-    this._fitDocked();   // scale the node layer to fit the panel (docked inspector only)
-    this._renderWires(); // measured after the fit, so wires track the scaled node positions
+    // Position the node layer: the inspector auto-fits, the full editor applies the pan/zoom.
+    if (this.docked) this._fitDocked();
+    else this._applyViewport();
+    this._renderWires();      // measured after the transform, so wires track scaled node positions
+    this._applyDiagnostics(); // flag nodes with unset required Parameters / no path from an event
+    this._updateToolbar();
     this._renderLibrary();
   }
 
@@ -549,6 +832,11 @@ export class FlowEditor {
 
     const header = el('div', 'node-header');
     header.appendChild(el('span', 'node-title', kind.title));
+    // Warning badge — toggled by _applyDiagnostics when the node is misconfigured (unset required
+    // Parameter, or unreachable from any Event). Hidden until then; its title lists the issues.
+    const warn = el('span', 'node-warn-badge', '⚠');
+    warn.style.display = 'none';
+    header.appendChild(warn);
     const del = el('button', 'node-delete', '✕');
     del.addEventListener('pointerdown', (e) => e.stopPropagation());
     del.addEventListener('click', (e) => { e.stopPropagation(); this._removeNode(node.id); });
@@ -834,6 +1122,7 @@ export class FlowEditor {
 
   _removeNode(id) {
     if (this.readOnly) return;
+    if (this._selected === id) this._selected = null;
     this.commit((m) => m.removeNode(id));
   }
 
@@ -855,7 +1144,64 @@ export class FlowEditor {
       // hit path first so the `.wire-hit:hover + .wire` highlight works.
       this.wireGroup.appendChild(hit);
       this.wireGroup.appendChild(path);
+      // Direction marker: a small triangle at the curve's midpoint, rotated along the tangent.
+      // Mid-line (not at the port) reads cleanly when several wires fan into one input and at any
+      // entry angle — see the path-geometry helper for the t=0.5 point + tangent.
+      const m = wireMidArrow(a, b);
+      const arrow = document.createElementNS(SVG_NS, 'path');
+      arrow.setAttribute('d', 'M 6 0 L -4 -4.5 L -4 4.5 Z');
+      arrow.setAttribute('transform', `translate(${m.x} ${m.y}) rotate(${m.deg})`);
+      arrow.classList.add('wire-arrow');
+      this.wireGroup.appendChild(arrow);
     }
+  }
+
+  // ── diagnostics ────────────────────────────────────────────────────────────
+
+  // Flag nodes that would silently do nothing at runtime, turning "why isn't my Runner acting?"
+  // into a visible cue: a required Parameter left unset, or a node with no path from any Event so
+  // its Run cursor can never reach it. Read-only inspection skips it (not an authoring concern).
+  _applyDiagnostics() {
+    const diag = this.readOnly ? new Map() : this._diagnostics();
+    for (const [id, nodeEl] of this.nodeEls) {
+      const issues = diag.get(id);
+      nodeEl.classList.toggle('has-warning', !!issues);
+      const badge = nodeEl.querySelector('.node-warn-badge');
+      if (badge) {
+        badge.style.display = issues ? '' : 'none';
+        badge.title = issues ? issues.join('\n') : '';
+      }
+    }
+  }
+
+  _diagnostics() {
+    const out = new Map();
+    if (!this.model) return out;
+    const isEvent = (kind) => getNodeKind(kind).category === 'event';
+    // Reachability: BFS along Exec connections from every Event (the only Run entry points).
+    const reachable = new Set();
+    const queue = [];
+    for (const n of this.model.nodes) if (isEvent(n.kind)) { reachable.add(n.id); queue.push(n.id); }
+    while (queue.length) {
+      const id = queue.shift();
+      for (const c of this.model.connections) {
+        if (c.from.node === id && !reachable.has(c.to.node)) { reachable.add(c.to.node); queue.push(c.to.node); }
+      }
+    }
+    for (const n of this.model.nodes) {
+      const issues = [];
+      for (const pid of REQUIRED_PARAMS[n.kind] || []) {
+        if (!n.params || n.params[pid] == null) {
+          const label = getParams(n.kind).find((p) => p.id === pid)?.label || pid;
+          issues.push(`Set “${label}”.`);
+        }
+      }
+      if (!isEvent(n.kind) && !reachable.has(n.id)) {
+        issues.push('Unreachable — connect it after an On Start (or another Event).');
+      }
+      if (issues.length) out.set(n.id, issues);
+    }
+    return out;
   }
 
   // ── interactions ───────────────────────────────────────────────────────────
@@ -863,24 +1209,38 @@ export class FlowEditor {
   _startPaletteDrag(e, kind) {
     if (this.readOnly) return;
     e.preventDefault();
-    const ghost = el('div', `flow-node category-${getNodeKind(kind).category} flow-ghost`);
-    ghost.appendChild(el('div', 'node-header', getNodeKind(kind).title));
-    document.body.appendChild(ghost);
+    const startX = e.clientX, startY = e.clientY;
+    let dragging = false;
+    let ghost = null;
     const place = (ev) => {
       ghost.style.left = `${ev.clientX - 60}px`;
       ghost.style.top = `${ev.clientY - 14}px`;
     };
-    place(e);
-    const move = (ev) => place(ev);
+    const move = (ev) => {
+      // Only spawn the ghost once the press turns into a real drag, so a plain click stays a click.
+      if (!dragging && Math.hypot(ev.clientX - startX, ev.clientY - startY) > 4) {
+        dragging = true;
+        ghost = el('div', `flow-node category-${getNodeKind(kind).category} flow-ghost`);
+        ghost.appendChild(el('div', 'node-header', getNodeKind(kind).title));
+        document.body.appendChild(ghost);
+      }
+      if (dragging) place(ev);
+    };
     const up = (ev) => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
-      ghost.remove();
-      const c = this.canvasEl.getBoundingClientRect();
-      const inside = ev.clientX >= c.left && ev.clientX <= c.right && ev.clientY >= c.top && ev.clientY <= c.bottom;
-      if (!inside || !this.model) return;
-      const p = this._canvasPoint(ev.clientX, ev.clientY);
-      this.commit((m) => m.addNode(kind, p.x - 60, p.y - 14));
+      if (ghost) ghost.remove();
+      if (!this.model) return;
+      if (!dragging) {
+        // Click (no drag): drop the node at the centre of the current view — quick add without aim.
+        const r = this.canvasEl.getBoundingClientRect();
+        const p = this._modelPoint(r.left + r.width / 2, r.top + r.height / 2);
+        this.commit((m) => m.addNode(kind, snap(p.x - 60), snap(p.y - 14)));
+        return;
+      }
+      if (!this._isInsideCanvas(ev.clientX, ev.clientY)) return;
+      const p = this._modelPoint(ev.clientX, ev.clientY);
+      this.commit((m) => m.addNode(kind, snap(p.x - 60), snap(p.y - 14)));
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -889,15 +1249,19 @@ export class FlowEditor {
   _startNodeDrag(e, nodeId) {
     if (this.readOnly) return;
     e.preventDefault();
+    this._select(nodeId);
     const node = this.model.getNode(nodeId);
-    const start = this._canvasPoint(e.clientX, e.clientY);
+    const start = this._modelPoint(e.clientX, e.clientY);
     const origin = { dx: start.x - node.x, dy: start.y - node.y };
     const nodeEl = this.nodeEls.get(nodeId);
     nodeEl.classList.add('dragging');
+    let pushed = false; // snapshot once, lazily, only if the node actually moves (undo)
     const move = (ev) => {
-      const p = this._canvasPoint(ev.clientX, ev.clientY);
-      const x = p.x - origin.dx;
-      const y = p.y - origin.dy;
+      if (!pushed) { this._pushUndo(); pushed = true; }
+      const p = this._modelPoint(ev.clientX, ev.clientY);
+      // Snap to the background grid for tidy layouts; hold Alt for free placement.
+      const x = ev.altKey ? p.x - origin.dx : snap(p.x - origin.dx);
+      const y = ev.altKey ? p.y - origin.dy : snap(p.y - origin.dy);
       this.model.moveNode(nodeId, x, y);
       nodeEl.style.transform = `translate(${x}px, ${y}px)`;
       this._renderWires();
@@ -906,8 +1270,10 @@ export class FlowEditor {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       nodeEl.classList.remove('dragging');
-      // The drag mutated the model live for smoothness; commit just persists + reconciles.
-      this.commit(() => {});
+      // The drag mutated the model live for smoothness (and took its own undo snapshot above);
+      // commit just persists + reconciles without a second snapshot.
+      this.commit(() => {}, { snapshot: false });
+      this._updateToolbar();
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -920,23 +1286,30 @@ export class FlowEditor {
     const source = { node: nodeId, port: portId, dir };
     const sourceCenter = this._portCenter(nodeId, portId);
     this.tempPath.classList.add('active');
+    this._highlightCompatiblePorts(source); // light up valid targets, dim the rest
+    const cleanup = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('keydown', onKey, true);
+      this.tempPath.classList.remove('active');
+      this.tempPath.removeAttribute('d');
+      this._clearPortHighlights();
+    };
+    const onKey = (ev) => { if (ev.key === 'Escape') { ev.stopPropagation(); cleanup(); } };
     const move = (ev) => {
       const p = this._canvasPoint(ev.clientX, ev.clientY);
       this.tempPath.setAttribute('d', wirePath(sourceCenter, p));
     };
     move(e);
     const up = (ev) => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      this.tempPath.classList.remove('active');
-      this.tempPath.removeAttribute('d');
+      cleanup();
       const target = portUnder(ev.clientX, ev.clientY);
       if (!target) {
         // Released on the empty Canvas. Dragging from an Exec output offers the node menu:
         // create-and-connect, splicing into any existing downstream wire. Inputs don't trigger it.
         const sourcePort = getPort(this.model.getNode(source.node)?.kind, source.port);
         if (source.dir === 'out' && sourcePort?.type === 'exec' && this._isInsideCanvas(ev.clientX, ev.clientY)) {
-          this._openNodeMenu(ev.clientX, ev.clientY, this._canvasPoint(ev.clientX, ev.clientY), source, this._downstreamOf(source));
+          this._openNodeMenu(ev.clientX, ev.clientY, this._modelPoint(ev.clientX, ev.clientY), source, this._downstreamOf(source));
         }
         return;
       }
@@ -950,6 +1323,30 @@ export class FlowEditor {
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
+    window.addEventListener('keydown', onKey, true);
+  }
+
+  // While a wire is being dragged from `source`, mark every other port as a valid target (would
+  // form a legal connection — see model.connectionError) or not, so the rules are visible, not
+  // discovered by trial. Cleared when the drag ends.
+  _highlightCompatiblePorts(source) {
+    this._clearPortHighlights();
+    this.canvasEl.classList.add('wiring');
+    for (const [, dot] of this.portEls) {
+      if (dot.dataset.node === source.node && dot.dataset.port === source.port) continue;
+      const target = { node: dot.dataset.node, port: dot.dataset.port };
+      const from = source.dir === 'out' ? source : target;
+      const to = source.dir === 'out' ? target : source;
+      const ok = !this.model.connectionError(
+        { node: from.node, port: from.port }, { node: to.node, port: to.port },
+      );
+      dot.classList.add(ok ? 'port-ok' : 'port-no');
+    }
+  }
+
+  _clearPortHighlights() {
+    this.canvasEl.classList.remove('wiring');
+    for (const [, dot] of this.portEls) dot.classList.remove('port-ok', 'port-no');
   }
 
   // ── node menu (drag an Exec output onto empty Canvas) ───────────────────────
@@ -985,9 +1382,20 @@ export class FlowEditor {
     const list = el('div', 'node-menu-list');
     menu.appendChild(list);
 
-    // Only kinds that can receive the Exec connection — i.e. have an Exec input (excludes Events).
-    const kinds = nodeKindsForRunner(this.model.targetKind).filter((k) => firstExecPort(k, 'in'));
-    const pick = (kind) => { this._spliceNode(kind, drop, source, downstream); this._closeNodeMenu(); };
+    // Kinds valid for this Flow, applying the same building-capability gate as the palette (so e.g.
+    // Build never appears in a non-builder Building Flow). With a `source` (dragged from an Exec
+    // output) restrict to kinds that can *receive* that connection — i.e. have an Exec input
+    // (excludes Events); with no source (double-click add) offer everything.
+    const buildingType = this.model.buildingType;
+    const kinds = nodeKindsForRunner(this.model.targetKind).filter((k) => {
+      if (k.buildingCapability && !getBuildingType(buildingType)?.[k.buildingCapability]) return false;
+      return source ? !!firstExecPort(k, 'in') : true;
+    });
+    const pick = (kind) => {
+      if (source) this._spliceNode(kind, drop, source, downstream);
+      else this.commit((m) => m.addNode(kind, snap(drop.x - 60), snap(drop.y - 14)));
+      this._closeNodeMenu();
+    };
     const items = kinds.map((k) => {
       const item = el('div', `palette-item node-menu-item category-${k.category}`);
       item.appendChild(el('span', 'palette-title', k.title));
@@ -1034,7 +1442,7 @@ export class FlowEditor {
   // and the new node has an Exec output, re-attach the tail so the node is spliced into the chain.
   _spliceNode(kind, drop, source, downstream) {
     this.commit((m) => {
-      const node = m.addNode(kind, drop.x - 60, drop.y - 14);
+      const node = m.addNode(kind, snap(drop.x - 60), snap(drop.y - 14));
       const inPort = firstExecPort(getNodeKind(kind), 'in');
       if (inPort) m.connect({ node: source.node, port: source.port }, { node: node.id, port: inPort.id });
       const outPort = firstExecPort(getNodeKind(kind), 'out');
@@ -1046,6 +1454,23 @@ export class FlowEditor {
 }
 
 // ── small helpers ──────────────────────────────────────────────────────────
+
+// Required Parameters per node kind — those that leave the node a silent no-op when unset, so the
+// editor can warn (see _diagnostics). Optional-by-design params (Hold/Wait duration, Move spread,
+// Build's assignFlow) are deliberately absent. Mirrors the executors' expectations in runtime.js.
+const REQUIRED_PARAMS = {
+  Move: ['destination'],
+  AttackMove: ['destination'],
+  Train: ['unitType'],
+  Research: ['upgradeType'],
+  Build: ['buildingType', 'destination'],
+  Branch: ['condition'],
+};
+
+// Grid step for snap-to-grid, aligned with the canvas's 22px dot-grid background.
+const GRID = 22;
+const snap = (v) => Math.round(v / GRID) * GRID;
+const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -1079,6 +1504,22 @@ function paramText(param, value) {
 function wirePath(a, b) {
   const dx = Math.max(40, Math.abs(b.x - a.x) * 0.5);
   return `M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}`;
+}
+
+// The midpoint of the wire's cubic Bézier (t=0.5) and the tangent angle there (degrees), so a
+// direction triangle can be placed mid-line and rotated to follow the curve. Control points must
+// match wirePath's: P1 = (a.x+dx, a.y), P2 = (b.x-dx, b.y).
+function wireMidArrow(a, b) {
+  const dx = Math.max(40, Math.abs(b.x - a.x) * 0.5);
+  const p1 = { x: a.x + dx, y: a.y };
+  const p2 = { x: b.x - dx, y: b.y };
+  // B(0.5) = ⅛P0 + ⅜P1 + ⅜P2 + ⅛P3
+  const x = 0.125 * a.x + 0.375 * p1.x + 0.375 * p2.x + 0.125 * b.x;
+  const y = 0.125 * a.y + 0.375 * p1.y + 0.375 * p2.y + 0.125 * b.y;
+  // B'(0.5) = ¾(P1−P0) + 1½(P2−P1) + ¾(P3−P2)
+  const tx = 0.75 * (p1.x - a.x) + 1.5 * (p2.x - p1.x) + 0.75 * (b.x - p2.x);
+  const ty = 0.75 * (p1.y - a.y) + 1.5 * (p2.y - p1.y) + 0.75 * (b.y - p2.y);
+  return { x, y, deg: Math.atan2(ty, tx) * 180 / Math.PI };
 }
 
 function firstExecPort(kindDef, dir) {
