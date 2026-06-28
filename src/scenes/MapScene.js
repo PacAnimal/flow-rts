@@ -267,6 +267,7 @@ export class MapScene extends Phaser.Scene {
       setSignal: (runner, name, raised) => this._setSignal(runner, name, raised),
       signalRaised: (runner, name) => this._signal(runner, name).raised,
       signalSeq: (runner, name) => this._signal(runner, name).seq,
+      signalLoweredSeq: (runner, name) => this._signal(runner, name).loweredSeq,
       // Production (docs/adr/0013): a building-scoped Action ticked on a Building Runner.
       train: (building, params, state, dt) => this._train(building, params, state, dt),
       // Research (docs/adr/0021): a building-scoped Action that unlocks an Upgrade, mirroring Train.
@@ -1734,21 +1735,24 @@ void main(void){
   }
 
   // The Signal record for `name` within a Runner's Faction (docs/adr/0022), created lowered on first
-  // read. `{ raised, seq }`; `seq` is bumped only on a rising edge so OnSignal fires once per raise.
+  // read. `{ raised, seq, loweredSeq }`; `seq` counts rising edges (OnSignal) and `loweredSeq` falling
+  // edges (OnSignalLowered), each bumped once per transition so an Interrupt fires once per edge.
   _signal(runner, name) {
     let byName = this._signals.get(runner.faction);
     if (!byName) this._signals.set(runner.faction, (byName = new Map()));
     let sig = byName.get(name);
-    if (!sig) byName.set(name, (sig = { raised: false, seq: 0 }));
+    if (!sig) byName.set(name, (sig = { raised: false, seq: 0, loweredSeq: 0 }));
     return sig;
   }
 
-  // Raise or lower a Faction Signal (docs/adr/0022). Bump the rising-edge `seq` only on lowered→raised
-  // so re-raising an already-raised Signal is a no-op (no fresh OnSignal fire). An unset name no-ops.
+  // Raise or lower a Faction Signal (docs/adr/0022). Bump the matching edge counter only on a real
+  // transition — lowered→raised feeds OnSignal, raised→lowered feeds OnSignalLowered — so re-setting a
+  // Signal to its current state is a no-op (no fresh fire on either edge). An unset name no-ops.
   _setSignal(runner, name, raised) {
     if (!name) return;
     const sig = this._signal(runner, name);
     if (raised && !sig.raised) sig.seq++;
+    if (!raised && sig.raised) sig.loweredSeq++;
     sig.raised = !!raised;
   }
 

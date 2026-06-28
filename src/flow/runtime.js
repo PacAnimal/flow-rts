@@ -246,6 +246,18 @@ const INTERRUPTS = {
     t.seen = seq;
     return true;
   },
+
+  // OnSignalLowered is the falling-edge twin (docs/adr/0022): same shape as OnSignal, but watching
+  // the world's lowered-count so it fires when a Signal is lowered (the all-clear) rather than raised.
+  OnSignalLowered: (node, t, dt, runner, world) => {
+    const name = node.params?.name;
+    if (!name) return false;
+    const seq = world.signalLoweredSeq ? world.signalLoweredSeq(runner, name) : 0;
+    if (t.seen === undefined) { t.seen = seq; return false; }
+    if (seq <= t.seen) return false;
+    t.seen = seq;
+    return true;
+  },
 };
 
 // Cap on stacked handler Frames: a safety valve against two fast Interrupts piling up faster than

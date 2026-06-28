@@ -133,10 +133,11 @@ _Avoid_: predicate, check, test, rule, trigger
 A named boolean shared across a Faction that Runners raise and read to coordinate without one
 Runner naming another — a Faction-wide blackboard. A Signal is either **raised** or lowered; it is
 identified by a freeform name (like a Category, the set in play is simply the distinct names used
-across Flows). Three nodes work it: the **SetSignal** Action raises or lowers one; the **OnSignal**
-Interrupt fires on its *rising edge* (the moment it goes from lowered to raised); the *signal raised*
-Condition reads whether it is currently raised. Edge (OnSignal) is for reacting the instant a Signal
-is raised; level (the Condition) is for gating a Branch on its standing value. Signals are scoped per
+across Flows). Four nodes work it: the **SetSignal** Action raises or lowers one; the **OnSignal**
+Interrupt fires on its *rising edge* (the moment it goes from lowered to raised) and **OnSignalLowered**
+on its *falling edge* (the all-clear); the *signal raised* Condition reads whether it is currently
+raised. Edge (OnSignal / OnSignalLowered) is for reacting the instant a Signal is raised or lowered;
+level (the Condition) is for gating a Branch on its standing value. Signals are scoped per
 Faction, so Player and Enemy Flows never read each other's. A Signal is world state, not part of a
 Run — like the Stockpile it is never saved and resets with the level. It lets pre-authored Flows act
 as a team (a Command Center raises *defend*; every Marine's OnSignal *defend* sends it home).

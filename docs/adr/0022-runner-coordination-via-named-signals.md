@@ -15,20 +15,23 @@ triad the timer and damage Interrupts already gave us:
 - **SetSignal** (Action, `any`) — raise or lower a named Signal. Params: `name`, `value` (boolean,
   default raise).
 - **OnSignal** (Event / Interrupt, `any`) — fires on the Signal's **rising edge**. Param: `name`.
+- **OnSignalLowered** (Event / Interrupt, `any`) — fires on the Signal's **falling edge** (the
+  all-clear). Param: `name`.
 - **signal_raised** (Condition) — true while the named Signal is raised. Arg: `name`.
 
 ## Decision details
 
-- **Edge *and* level.** `OnSignal` reacts the instant a Signal is raised (the reflex — preempts the
-  Run via the Frame stack, ADR-0019); `signal_raised` reads its standing value for a `Branch` to gate
-  on (the poll). Both are needed: "drop everything and defend the moment the alarm sounds" is an
-  edge; "while the alarm stands, hold the line" is a level.
-- **Rising-edge via a raise-sequence counter**, reusing the exact mechanism OnDamaged uses for its
-  Damage tally. Each Signal carries a monotonic `seq` bumped *only* on a lowered→raised transition.
-  `OnSignal`'s per-Run timer remembers the `seq` it last reacted to; it arms at the current value on
-  first sight (so a Signal already raised before the Run armed does not fire it) and fires when the
-  value advances. Re-raising an already-raised Signal is a no-op (no double-fire); lower-then-raise
-  fires again.
+- **Edge *and* level.** `OnSignal` / `OnSignalLowered` react the instant a Signal is raised or lowered
+  (the reflex — preempt the Run via the Frame stack, ADR-0019); `signal_raised` reads its standing
+  value for a `Branch` to gate on (the poll). Both are needed: "drop everything and defend the moment
+  the alarm sounds" is an edge; "while the alarm stands, hold the line" is a level.
+- **Both edges via per-edge sequence counters**, reusing the exact mechanism OnDamaged uses for its
+  Damage tally. Each Signal carries two monotonic counters — `seq` bumped *only* on a lowered→raised
+  transition, `loweredSeq` *only* on raised→lowered. The Interrupt's per-Run timer remembers the
+  count it last reacted to; it arms at the current value on first sight (so a Signal already in that
+  state before the Run armed does not fire it) and fires when its counter advances. Re-setting a
+  Signal to the state it already holds is a no-op on both edges (no double-fire); a genuine
+  lower-then-raise fires each edge once.
 - **No synchronous cascade.** `SetSignal` only mutates world state and advances; it never fires an
   Interrupt itself. `OnSignal` fires from the per-tick interrupt sweep (step 1 of `tickRun`,
   ADR-0019), which runs *before* the active Frame steps. So a Signal raised this tick is observed by
@@ -67,11 +70,11 @@ triad the timer and damage Interrupts already gave us:
 ## Consequences
 
 - A `_signals` map in MapScene (init in `create()`, cleared on restart) beside `_stockpile`, and
-  three new `world` primitives (`setSignal`, `signalRaised`, `signalSeq`) keyed by the Runner's
-  Faction.
-- A new SetSignal node kind (descriptor + executor), an OnSignal Interrupt (descriptor + an
-  `INTERRUPTS` predicate reading `world.signalSeq`, shaped like OnDamaged), and a `signal_raised`
-  Condition evaluated in `_testCondition`.
+  four new `world` primitives (`setSignal`, `signalRaised`, `signalSeq`, `signalLoweredSeq`) keyed by
+  the Runner's Faction.
+- A new SetSignal node kind (descriptor + executor), the OnSignal and OnSignalLowered Interrupts
+  (descriptors + `INTERRUPTS` predicates reading `world.signalSeq` / `world.signalLoweredSeq`, shaped
+  like OnDamaged), and a `signal_raised` Condition evaluated in `_testCondition`.
 - A new `signalName` Parameter type in the editor: a free-text input with a datalist harvested from
   the Library's existing Signal names (the first Parameter type that is neither a fixed dropdown nor
   a numeric/tile input).

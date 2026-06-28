@@ -90,6 +90,24 @@ export const NODE_KINDS = {
     ],
   },
 
+  OnSignalLowered: {
+    kind: 'OnSignalLowered',
+    category: 'event',
+    runner: 'any',
+    title: 'On Signal Lowered',
+    // The falling-edge twin of OnSignal (docs/adr/0019, 0022): an Interrupt that fires the moment a
+    // Faction Signal is lowered (the "all-clear"), suspends the Run to handle it, then resumes. Where
+    // OnSignal reacts to a raise, this reacts to a stand-down — a Marine sent home by OnSignal `defend`
+    // returns to gathering when the Command Center lowers `defend`. Re-arms after each falling edge.
+    // An unset `name` is inert (ADR-0004). Like every Event: an Exec out, no Exec in.
+    ports: [
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+    params: [
+      { id: 'name', type: 'signalName', label: 'Signal' },
+    ],
+  },
+
   Move: {
     kind: 'Move',
     category: 'action',
