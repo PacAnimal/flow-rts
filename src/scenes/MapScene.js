@@ -129,6 +129,11 @@ export class MapScene extends Phaser.Scene {
     // (docs/adr/0005). Set before spawning Units so their Runs don't begin at assignment.
     this._running = false;
 
+    // Fast-forward multiplier (×1–×4). Since the scenario is meant to play itself out from
+    // Flows authored up front, this lets the player compress wall-clock time. update() advances
+    // the whole sim `_speed` times per rendered frame (substepping, not delta-scaling).
+    this._speed = 1;
+
     // Shared Tile-occupancy layer (docs/adr/0009): `${tx},${ty}` → { kind, blocking }. Every
     // footprint feature (Deposit, Decoration, Building) registers here. Spawn rejects a
     // placement if any of its Footprint Tiles is occupied; walkable() blocks on blocking ones.
@@ -296,17 +301,23 @@ export class MapScene extends Phaser.Scene {
     if (!this.units) return;
 
     if (this._running && !this._over) {
-      // Tick every Runner's Run — Units and Buildings alike (CONTEXT.md Runner). Buildings run
-      // building-scoped Flows (Train); Units run movement/gather/combat Flows.
-      for (const runner of this._runners()) this._tickRunner(runner, delta);
+      // Fast-forward by substepping: advance the entire sim `_speed` times this frame, each with
+      // the real frame delta. Substepping rather than scaling delta keeps movement steering and
+      // Tile-occupancy stable at speed — a 4× delta would let fast Units overshoot waypoints and
+      // tunnel through footprints. Sprite/DOM sync below still runs once per rendered frame.
+      for (let step = 0; step < this._speed && !this._over; step++) {
+        // Tick every Runner's Run — Units and Buildings alike (CONTEXT.md Runner). Buildings run
+        // building-scoped Flows (Train); Units run movement/gather/combat Flows.
+        for (const runner of this._runners()) this._tickRunner(runner, delta);
 
-      // Combat resolves before movement so an engaging Unit holds its ground (docs/adr/0012),
-      // then the movement pass integrates positions, then the Scenario advances its wave clock.
-      this._combat.update(this.units, delta);
-      this._movement.update(this.units, delta);
-      this._updateScenario(delta);
+        // Combat resolves before movement so an engaging Unit holds its ground (docs/adr/0012),
+        // then the movement pass integrates positions, then the Scenario advances its wave clock.
+        this._combat.update(this.units, delta);
+        this._movement.update(this.units, delta);
+        this._updateScenario(delta);
 
-      this._checkObjective();
+        this._checkObjective();
+      }
     }
 
     this._fpsEl.textContent   = `FPS: ${Math.min(30, Math.round(this.game.loop.actualFps))}`;
@@ -1899,21 +1910,49 @@ void main(void){
     restart.textContent = '↻ Restart';
     restart.addEventListener('click', () => this._restartLevel());
 
+    // Speed control: one toggle per multiplier. The selected one drives update()'s substep count.
+    const speeds = document.createElement('div');
+    speeds.className = 'sim-speeds';
+    this._speedBtns = [1, 2, 3, 4].map((mult) => {
+      const b = document.createElement('button');
+      b.className = 'sim-speed';
+      b.textContent = `×${mult}`;
+      b.dataset.speed = mult;
+      b.addEventListener('click', () => this._setSpeed(mult));
+      speeds.appendChild(b);
+      return b;
+    });
+
     // These buttons are a DOM overlay above the canvas, but Phaser also listens for pointerup on
     // `window` (inputWindowEvents, to catch drags ending off-canvas). Without this, a click on a
     // button bubbles to that listener, which hit-tests a Runner underneath and fires gameobjectup —
     // popping the assign overlay "through" the button. Swallow the pointer events at the source.
-    for (const el of [start, restart]) {
+    for (const el of [start, restart, ...this._speedBtns]) {
       for (const ev of ['pointerdown', 'pointerup', 'mousedown', 'mouseup']) {
         el.addEventListener(ev, (e) => e.stopPropagation());
       }
     }
 
-    bar.append(start, restart);
+    bar.append(start, restart, speeds);
     document.body.appendChild(bar);
     this._toolbar = bar;
     this._startBtn = start;
     this._updateStartBtn();
+    this._updateSpeedBtns();
+  }
+
+  // Set the fast-forward multiplier (see update()'s substep loop). Inert once the level is decided.
+  _setSpeed(mult) {
+    if (this._over) return;
+    this._speed = mult;
+    this._updateSpeedBtns();
+  }
+
+  _updateSpeedBtns() {
+    if (!this._speedBtns) return;
+    for (const b of this._speedBtns) {
+      b.classList.toggle('active', Number(b.dataset.speed) === this._speed);
+    }
   }
 
   // Restart the level from scratch (docs/adr/0014). The scene owns DOM overlays appended to <body>
