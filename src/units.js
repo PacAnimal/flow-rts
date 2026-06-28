@@ -165,3 +165,15 @@ export function producerBuildings() {
 export function buildableBuildings() {
   return Object.values(BUILDING_TYPES).filter((b) => b.buildable);
 }
+
+// The Unit / Building types the player can field — the menus for the unit_count and building_exists
+// Conditions (the unitKind / buildingKind selectors). Unlike producibleBy / buildableBuildings these
+// are not scoped to one producing Building: a Condition counts forces across the whole base, and the
+// Command Center (not buildable) must still be countable as a building that exists.
+export function playerUnitTypes() {
+  return Object.values(UNIT_TYPES).filter((u) => u.producedBy);
+}
+
+export function playerBuildingTypes() {
+  return Object.values(BUILDING_TYPES);
+}

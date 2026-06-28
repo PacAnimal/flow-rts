@@ -39,6 +39,39 @@ export const NODE_KINDS = {
     ],
   },
 
+  OnDamaged: {
+    kind: 'OnDamaged',
+    category: 'event',
+    runner: 'any',
+    title: 'On Damaged',
+    // An Interrupt Event (docs/adr/0019) that fires when this Runner takes Damage: it suspends
+    // whatever the Run is doing, runs this chain, then resumes. The survival reflex — wire it to
+    // Retreat (a Worker flees when hit) or Hold/AttackMove (a Marine fights back, then returns to
+    // its post). Always repeating: it re-arms after each handling, so renewed fire keeps a Runner
+    // reacting under sustained attack. Like every Event: an Exec out, no Exec in.
+    ports: [
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+  },
+
+  OnWaveIncoming: {
+    kind: 'OnWaveIncoming',
+    category: 'event',
+    runner: 'any',
+    title: 'On Wave Incoming',
+    // An Interrupt Event (docs/adr/0019) keyed to the Scenario's Wave clock (docs/adr/0014): it
+    // fires once when the next Wave is `lead` seconds away, suspending the Run to handle it, then
+    // resumes. The macro half of hands-off survival — gather/build during the lull, then on this
+    // Interrupt rally to a defensive line before the Enemies arrive. Re-arms for each subsequent
+    // Wave. An unset/zero `lead` is inert (ADR-0004), like OnTimer's `delay`.
+    ports: [
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+    params: [
+      { id: 'lead', type: 'number', label: 'Lead seconds', min: 0, step: 1 },
+    ],
+  },
+
   Move: {
     kind: 'Move',
     category: 'action',
@@ -123,6 +156,22 @@ export const NODE_KINDS = {
     // 'duration' is optional (ADR-0004): unset/0 ⇒ hold forever; >0 ⇒ hold that many seconds.
     params: [
       { id: 'duration', type: 'number', label: 'Seconds (0 = forever)', min: 0, step: 0.5 },
+    ],
+  },
+
+  Retreat: {
+    kind: 'Retreat',
+    category: 'action',
+    runner: 'unit',
+    title: 'Retreat',
+    // Fall back to the nearest friendly Command Center and stand beside it, dropping any combat
+    // stance on the way (docs/adr/0012). Unlike Move it needs no destination Parameter — it resolves
+    // one from live world state, so a single Flow shared by many Units routes each to its own base.
+    // The active half of the survival reflex (pair with OnDamaged or a self_health_below Branch).
+    // Completes on arrival; with no friendly Command Center it is a no-op that advances.
+    ports: [
+      { id: 'in', dir: 'in', type: 'exec', label: '' },
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
     ],
   },
 

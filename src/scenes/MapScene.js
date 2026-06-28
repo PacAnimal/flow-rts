@@ -246,6 +246,16 @@ export class MapScene extends Phaser.Scene {
       hold: (unit) => this._setCombat(unit, 'hold', null),
       attackMoveArrived: (unit) => this._movement.arrived(unit) && !(unit.combat && unit.combat.engaged),
       roamDest: (unit) => this._roamDest(unit),
+      // Fall back to base (Retreat): a standing Tile beside the nearest friendly Command Center.
+      retreatDest: (unit) => this._retreatDest(unit),
+      // Interrupt senses (docs/adr/0019): a monotonic Damage tally per Runner backs OnDamaged; the
+      // seconds until the next Scenario Wave (Infinity once they are all out) backs OnWaveIncoming.
+      damageCount: (runner) => runner._damageSeq || 0,
+      secondsUntilNextWave: () => {
+        const st = this._scenarioState;
+        if (st.next >= SCENARIO.waves.length) return Infinity;
+        return Math.max(0, SCENARIO.waves[st.next].at - st.time);
+      },
       // Production (docs/adr/0013): a building-scoped Action ticked on a Building Runner.
       train: (building, params, state, dt) => this._train(building, params, state, dt),
       // Research (docs/adr/0021): a building-scoped Action that unlocks an Upgrade, mirroring Train.
@@ -403,6 +413,9 @@ export class MapScene extends Phaser.Scene {
   // Apply Damage to a Runner; if it dies, remove it. The Command Center falling ends the level.
   _applyDamage(target, amount) {
     if (!target || target.health <= 0) return;
+    // Monotonic per-Runner Damage tally that backs the OnDamaged Interrupt (docs/adr/0019): the
+    // predicate fires when this count advances past what its Run has already reacted to.
+    target._damageSeq = (target._damageSeq || 0) + 1;
     const died = applyDamage(target, amount);
     this._log(`${target.label} takes ${amount} damage — Health: ${target.health}/${target.maxHealth}`);
     if (died) {
@@ -1691,6 +1704,10 @@ void main(void){
       case 'stockpile_gte':     return (this._stockpile[params.resource || 'alloys'] || 0) >= (params.amount || 0);
       case 'enemy_in_range':    return this._enemyWithin(unit, this._effectiveStats(unit.type, unit.faction)?.range || 0);
       case 'enemy_nearby':      return this._enemyWithin(unit, params.amount || params.radius || 0);
+      case 'self_health_below': return unit.maxHealth > 0 && (unit.health / unit.maxHealth) * 100 < (params.percent || 0);
+      case 'unit_count':        return this._playerUnitCount(params.unitKind) >= (params.amount || 0);
+      case 'building_exists':   return !!params.buildingKind && this.buildings.some(
+                                  (b) => b.faction === FACTION.PLAYER && b.health > 0 && b.type === params.buildingKind);
       default:                  return false;
     }
   }
@@ -1702,6 +1719,43 @@ void main(void){
     for (const t of this._targetsFor(unit))
       if (Math.hypot(unit.x - t.x, unit.y - t.y) - t.radius <= reach) return true;
     return false;
+  }
+
+  // Count alive player Units, optionally of one type — backs the unit_count Condition. An unset
+  // `kind` counts the whole player army (e.g. a population cap), a set one a single type.
+  _playerUnitCount(kind) {
+    let n = 0;
+    for (const u of this.units)
+      if (u.faction === FACTION.PLAYER && u.health > 0 && (!kind || u.type === kind)) n++;
+    return n;
+  }
+
+  // Where a Retreat sends a Unit: a Walkable Tile just outside the nearest friendly Command Center's
+  // Footprint, nearest to the Unit. null when its Faction has no Command Center left (Retreat then
+  // no-ops). Resolved from live state so one shared Flow routes each Unit to its own base.
+  _retreatDest(unit) {
+    const { x: ux, y: uy } = this._unitTile(unit);
+    let best = null, bestD = Infinity;
+    for (const b of this.buildings) {
+      if (b.type !== 'command_center' || b.faction !== unit.faction || b.health <= 0) continue;
+      const d = (b.tx + b.tileW / 2 - ux) ** 2 + (b.ty + b.tileH / 2 - uy) ** 2;
+      if (d < bestD) { bestD = d; best = b; }
+    }
+    return best ? this._freeTileAround(best, ux, uy) : null;
+  }
+
+  // The Walkable Tile in the ring one Tile outside a Building's Footprint that is nearest to
+  // (fromX,fromY). Used to stand a retreating Unit beside its base; null if the ring is fully blocked.
+  _freeTileAround(b, fromX, fromY) {
+    let best = null, bestD = Infinity;
+    for (let ty = b.ty - 1; ty <= b.ty + b.tileH; ty++)
+      for (let tx = b.tx - 1; tx <= b.tx + b.tileW; tx++) {
+        const inside = tx >= b.tx && tx < b.tx + b.tileW && ty >= b.ty && ty < b.ty + b.tileH;
+        if (inside || !this.walkable(tx, ty)) continue;
+        const d = (tx - fromX) ** 2 + (ty - fromY) ** 2;
+        if (d < bestD) { best = { x: tx, y: ty }; bestD = d; }
+      }
+    return best;
   }
 
   // ── buildings ─────────────────────────────────────────────────────────────

@@ -103,6 +103,16 @@ const EXECUTORS = {
     return state.elapsed >= seconds * 1000 ? done() : RUNNING;
   },
 
+  // Fall back to the nearest friendly Command Center (docs/adr/0012). The world resolves a standing
+  // Tile beside it from live state; null ⇒ no base to retreat to, so no-op and advance. Cache the
+  // Tile in scratch (a Building can't move, so the goal is stable) and glide there with loose arrival
+  // so several retreaters settle around the base rather than stacking. Re-assigning resets the cache.
+  Retreat: (node, runner, world, dt, state) => {
+    if (state.dest === undefined) state.dest = world.retreatDest(runner);
+    if (!state.dest) return done();
+    return world.moveToward(runner, state.dest, true) ? done() : RUNNING;
+  },
+
   // Produce a Unit from a Building (docs/adr/0013). The world blocks until the Stockpile affords
   // the cost, then waits the build time and spawns; it returns true only once the Unit is out.
   // Funding/timing live in the per-node scratch state, so re-assignment resets cleanly.
@@ -171,12 +181,14 @@ const EXECUTORS = {
   Branch: (node, runner, world) => done(world.test(runner, node.params || {}) ? 'yes' : 'no'),
 };
 
-// Interrupt predicates (docs/adr/0019), keyed by node kind like EXECUTORS. Each advances its own
-// per-Run clock `t = { elapsed, fired }` and reports whether the Interrupt is due THIS frame. The
-// firing loop owns the cross-cutting rules — pausing the clock while the Interrupt's own handler is
-// live, ignoring an unwired Interrupt, resetting on fire — so a predicate only decides timing.
-// OnTimer fires once `delay` seconds have elapsed; with `repeat` off (default on) it fires once.
+// Interrupt predicates (docs/adr/0019), keyed by node kind like EXECUTORS. Each gets its own
+// per-Run scratch `t` (seeded `{ elapsed, fired }`, but a predicate may stash more) plus the
+// `runner` and `world` so an Interrupt can be keyed to world state, not just elapsed time. It
+// reports whether the Interrupt is due THIS frame. The firing loop owns the cross-cutting rules —
+// pausing the clock while the Interrupt's own handler is live, ignoring an unwired Interrupt,
+// resetting `elapsed`/`fired` on fire — so a predicate only decides whether to fire now.
 const INTERRUPTS = {
+  // OnTimer fires once `delay` seconds have elapsed; with `repeat` off (default on) it fires once.
   OnTimer: (node, t, dt) => {
     const repeat = node.params?.repeat !== false; // default: repeating
     if (!repeat && t.fired) return false;         // spent one-shot
@@ -184,6 +196,33 @@ const INTERRUPTS = {
     if (delayMs <= 0) return false;               // unset/zero delay is inert (ADR-0004)
     t.elapsed += dt;
     return t.elapsed >= delayMs;
+  },
+
+  // OnDamaged fires whenever the Runner's running tally of Damage events advances. The world keeps a
+  // monotonic counter per Runner; `t.seen` remembers the count this Run has already reacted to. First
+  // sight just arms at the current value (so pre-existing Damage doesn't fire it); thereafter any new
+  // hit fires. While its own handler is live the firing loop pauses it, so blows landing mid-retreat
+  // accumulate and re-fire once the handler pops — keeping a Runner reacting under sustained fire.
+  OnDamaged: (node, t, dt, runner, world) => {
+    const seq = world.damageCount ? world.damageCount(runner) : 0;
+    if (t.seen === undefined) { t.seen = seq; return false; }
+    if (seq <= t.seen) return false;
+    t.seen = seq;
+    return true;
+  },
+
+  // OnWaveIncoming fires once when the next Scenario Wave is within `lead` seconds (docs/adr/0014).
+  // `t.armed` latches across the window so it fires on entry, not every frame; it clears once the
+  // window reopens (the clock jumps to a Wave still further out after one spawns), re-arming for the
+  // next. Unset/zero `lead` is inert (ADR-0004). With no Waves left the world reports Infinity.
+  OnWaveIncoming: (node, t, dt, runner, world) => {
+    const lead = node.params?.lead || 0;
+    if (lead <= 0) return false;
+    const until = world.secondsUntilNextWave ? world.secondsUntilNextWave() : Infinity;
+    if (until > lead) { t.armed = false; return false; }
+    if (t.armed) return false;
+    t.armed = true;
+    return true;
   },
 };
 
@@ -251,7 +290,7 @@ function fireDueInterrupts(run, runner, model, world, dt) {
     const t = run.timers[node.id] || (run.timers[node.id] = { elapsed: 0, fired: false });
     if (live.has(node.id)) continue;        // clock paused while its own handler is live
     if (!hasHandler(model, node)) continue; // unwired Interrupt is inert
-    if (!pred(node, t, dt)) continue;
+    if (!pred(node, t, dt, runner, world)) continue;
     t.elapsed = 0;
     t.fired = true;
     if (run.stack.length >= MAX_STACK_DEPTH) continue; // safety valve: drop the fire, retry later

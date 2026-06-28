@@ -8,7 +8,10 @@ import './editor.css';
 import { createStore } from './store.js';
 import { getNodeKind, getParams, getPort, nodeKindsForRunner } from './nodeKinds.js';
 import { CONDITIONS, getCondition } from '../conditions.js';
-import { producibleBy, producerBuildings, buildableBuildings, getBuildingType } from '../units.js';
+import {
+  producibleBy, producerBuildings, buildableBuildings, getBuildingType,
+  playerUnitTypes, playerBuildingTypes,
+} from '../units.js';
 import { researchableBy } from '../upgrades.js';
 import { RESOURCES } from '../resources.js';
 import { pickPosition } from './positionPicker.js';
@@ -597,6 +600,14 @@ export class FlowEditor {
     if (param.type === 'resource')
       return this._selectParam(node, param,
         Object.values(RESOURCES).map((r) => ({ value: r.id, label: `${r.glyph} ${r.label}` })));
+    // unitKind / buildingKind: base-wide type selectors for the unit_count / building_exists
+    // Conditions — unlike unitType/buildingType they aren't scoped to one producing Building.
+    if (param.type === 'unitKind')
+      return this._selectParam(node, param,
+        playerUnitTypes().map((u) => ({ value: u.id, label: u.label })));
+    if (param.type === 'buildingKind')
+      return this._selectParam(node, param,
+        playerBuildingTypes().map((b) => ({ value: b.id, label: b.label })));
     if (param.type === 'flowRef')
       return this._selectParam(node, param, this._unitFlowOptions());
     if (param.type === 'buildingType')
@@ -732,6 +743,7 @@ export class FlowEditor {
     const input = el('input', 'param-input');
     input.type = 'number';
     if (param.min != null) input.min = param.min;
+    if (param.max != null) input.max = param.max;
     if (param.step != null) input.step = param.step;
     const current = node.params && node.params[param.id];
     input.value = current == null ? '' : current;
