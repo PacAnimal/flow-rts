@@ -370,6 +370,26 @@
   font-size: 11px;
 }
 
+/* Category colour legend, above the node list. */
+.palette-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #2c3a43;
+}
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #8aa0ad; }
+.legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: #45606e;
+}
+.legend-item.category-event .legend-swatch { background: #e0a23c; }
+.legend-item.category-action .legend-swatch { background: #3a7bd5; }
+.legend-item.category-control .legend-swatch { background: #9b6cd5; }
+
 /* Category accents */
 .category-event { border-left-color: #e0a23c; }
 .category-action { border-left-color: #3a7bd5; }
@@ -408,10 +428,14 @@
   position: relative;
   flex: 1 1 auto;
   overflow: hidden;
+  cursor: grab; /* empty canvas can be dragged to pan */
   background:
     radial-gradient(circle at 1px 1px, #2a3742 1px, transparent 0) 0 0 / 22px 22px,
     #131a1f;
 }
+.flow-canvas.panning { cursor: grabbing; }
+/* No panning in the docked inspector; restore the default cursor there. */
+.flow-editor.docked .flow-canvas, .flow-editor.read-only .flow-canvas { cursor: default; }
 .flow-wires {
   position: absolute;
   inset: 0;
@@ -436,6 +460,9 @@
 }
 .wire-hit:hover + .wire,
 .wire-group .wire-hit:hover { stroke: #e0533c; }
+/* Direction triangle at each wire's midpoint (source → target). Non-interactive so it never
+   eats a click meant for the wire-hit path beneath it. */
+.wire-arrow { fill: #93aab8; pointer-events: none; }
 
 /* Nodes */
 .flow-node {
@@ -454,6 +481,18 @@
 .flow-node.category-action { border-top-color: #3a7bd5; }
 .flow-node.category-control { border-top-color: #9b6cd5; }
 .flow-node.dragging { box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55); z-index: 5; }
+.flow-node { cursor: default; }
+/* Selected node (click to select, Delete to remove). */
+.flow-node.selected { outline: 2px solid #5b97e8; outline-offset: 2px; }
+/* Misconfigured node (unset required Parameter / unreachable) — subtle amber edge + a ⚠ badge. */
+.flow-node.has-warning { border-color: #7a5e2e; }
+.node-warn-badge {
+  margin-left: auto;
+  margin-right: 4px;
+  color: #f0b44b;
+  font-size: 12px;
+  cursor: help;
+}
 
 /* Debug-inspect live cursor: the node a Runner's Run currently sits on. running = active
    (pulsing green); idle = Flow finished here; halted = the current node was deleted under it. */
@@ -564,6 +603,15 @@
 .port:hover { background: #5b97e8; border-color: #8ab6f0; }
 .port-exec { border-radius: 3px; } /* exec ports square-ish to read as control flow */
 
+/* While dragging a wire, valid drop targets glow and incompatible ports dim — so the connection
+   rules (exec→exec, out→in, no dup) are visible rather than discovered by trial. */
+.flow-canvas.wiring .port-ok {
+  background: #5b97e8;
+  border-color: #cfe3ff;
+  box-shadow: 0 0 0 4px rgba(91, 151, 232, 0.35);
+}
+.flow-canvas.wiring .port-no { opacity: 0.25; }
+
 /* Node Parameters (e.g. Move's destination) */
 .node-params {
   border-top: 1px solid #33454f;
@@ -640,6 +688,42 @@
   color: #9fb4c0;
   pointer-events: none;
 }
+
+/* Canvas toolbar — undo/redo, zoom, fit, auto-arrange. Top-right of the canvas, offset left to
+   clear the fixed "Flow" toggle button that sits in the screen's top-right corner. */
+.flow-toolbar {
+  position: absolute;
+  top: 10px;
+  right: 88px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  background: rgba(20, 26, 31, 0.86);
+  border: 1px solid #33454f;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+/* Hidden in the docked inspector / read-only mode (auto-fit, no edits). */
+.flow-editor.docked .flow-toolbar, .flow-editor.read-only .flow-toolbar { display: none; }
+.flow-tool {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  font: 700 14px/1 system-ui, sans-serif;
+  color: #cdd9e0;
+  background: #2b3a44;
+  border: 1px solid #45606e;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.flow-tool:hover { background: #34505c; }
+.flow-tool:disabled { opacity: 0.4; cursor: default; }
+.flow-tool:disabled:hover { background: #2b3a44; }
+.flow-tool-text { font-size: 12px; letter-spacing: 0.03em; }
+.flow-zoom { min-width: 48px; font-size: 12px; }
+.flow-tool-sep { width: 1px; height: 20px; background: #3a4b56; margin: 0 2px; }
 
 /* Assign-flow overlay (opened by clicking a Unit) */
 .assign-overlay {
