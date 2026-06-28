@@ -28,6 +28,43 @@ export const CONDITIONS = {
     label: 'Enemy nearby',
     args: [{ id: 'radius', type: 'number', label: 'Tiles', min: 1, step: 1 }],
   },
+
+  // Self-state Condition: the Runner's own Health as a percentage of its max, below a threshold.
+  // The sensory half of the survival reflex — pair it with Retreat (e.g. Branch(health < 40%) →
+  // Retreat) when a hands-off Flow must decide for itself whether to fall back. Reads Health, which
+  // every Runner carries (CONTEXT.md), so it is valid on Unit and Building Flows alike.
+  self_health_below: {
+    id: 'self_health_below',
+    label: 'Own health below %',
+    args: [{ id: 'percent', type: 'number', label: 'Percent', min: 1, max: 100, step: 5 }],
+  },
+
+  // Force-composition Conditions: count the player's own Runners so a pre-authored Flow can cap or
+  // gate production without a human watching (e.g. Branch(Marines ≥ 8) ends a Barracks train loop;
+  // Branch(no Barracks) → Build a Barracks). They read live world state and change nothing.
+  unit_count: {
+    id: 'unit_count',
+    label: 'Own unit count ≥ N',
+    // `unitKind` unset ⇒ count every player Unit; set ⇒ only that type. Mirrors stockpile_gte's
+    // optional selector + amount shape.
+    args: [
+      { id: 'unitKind', type: 'unitKind', label: 'Unit' },
+      { id: 'amount', type: 'number', label: 'Amount', min: 0, step: 1 },
+    ],
+  },
+  building_exists: {
+    id: 'building_exists',
+    label: 'Own building exists',
+    args: [{ id: 'buildingKind', type: 'buildingKind', label: 'Building' }],
+  },
+
+  // Coordination Condition (docs/adr/0022): is a Faction Signal currently raised? The level (poll)
+  // half of Signals — gate a Branch on a standing alarm, where OnSignal reacts to its rising edge.
+  signal_raised: {
+    id: 'signal_raised',
+    label: 'Signal raised',
+    args: [{ id: 'name', type: 'signalName', label: 'Signal' }],
+  },
 };
 
 export function getCondition(id) {

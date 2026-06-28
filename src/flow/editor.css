@@ -50,6 +50,27 @@
 }
 .sim-restart:hover { background: #525962; }
 
+/* Speed control: a tight group of ×1–×4 toggles; the active one is highlighted. */
+.sim-speeds {
+  display: flex;
+  gap: 4px;
+}
+.sim-speed {
+  padding: 8px 12px;
+  font: 700 13px/1 system-ui, sans-serif;
+  letter-spacing: 0.04em;
+  color: #e8eef2;
+  background: #2c3138;
+  border: 1px solid #4a525c;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.sim-speed:hover { background: #363c44; }
+.sim-speed.active {
+  background: #3a6ea5;
+  border-color: #5a93d1;
+}
+
 /* Materials panel — player Stockpile readout, top-left. */
 .materials-panel {
   position: fixed;

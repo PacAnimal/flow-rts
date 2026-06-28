@@ -39,6 +39,75 @@ export const NODE_KINDS = {
     ],
   },
 
+  OnDamaged: {
+    kind: 'OnDamaged',
+    category: 'event',
+    runner: 'any',
+    title: 'On Damaged',
+    // An Interrupt Event (docs/adr/0019) that fires when this Runner takes Damage: it suspends
+    // whatever the Run is doing, runs this chain, then resumes. The survival reflex — wire it to
+    // Retreat (a Worker flees when hit) or Hold/AttackMove (a Marine fights back, then returns to
+    // its post). Always repeating: it re-arms after each handling, so renewed fire keeps a Runner
+    // reacting under sustained attack. Like every Event: an Exec out, no Exec in.
+    ports: [
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+  },
+
+  OnWaveIncoming: {
+    kind: 'OnWaveIncoming',
+    category: 'event',
+    runner: 'any',
+    title: 'On Wave Incoming',
+    // An Interrupt Event (docs/adr/0019) keyed to the Scenario's Wave clock (docs/adr/0014): it
+    // fires once when the next Wave is `lead` seconds away, suspending the Run to handle it, then
+    // resumes. The macro half of hands-off survival — gather/build during the lull, then on this
+    // Interrupt rally to a defensive line before the Enemies arrive. Re-arms for each subsequent
+    // Wave. An unset/zero `lead` is inert (ADR-0004), like OnTimer's `delay`.
+    ports: [
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+    params: [
+      { id: 'lead', type: 'number', label: 'Lead seconds', min: 0, step: 1 },
+    ],
+  },
+
+  OnSignal: {
+    kind: 'OnSignal',
+    category: 'event',
+    runner: 'any',
+    title: 'On Signal',
+    // An Interrupt Event (docs/adr/0019, 0022) keyed to a Faction Signal: it fires on the Signal's
+    // rising edge — the moment another Runner (or this one) raises it with SetSignal — suspends the
+    // Run to handle it, then resumes. The reactive half of coordination: a Command Center raises
+    // `defend`; every Marine's OnSignal `defend` sends it home. Re-arms after each rising edge.
+    // An unset `name` is inert (ADR-0004). Like every Event: an Exec out, no Exec in.
+    ports: [
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+    params: [
+      { id: 'name', type: 'signalName', label: 'Signal' },
+    ],
+  },
+
+  OnSignalLowered: {
+    kind: 'OnSignalLowered',
+    category: 'event',
+    runner: 'any',
+    title: 'On Signal Lowered',
+    // The falling-edge twin of OnSignal (docs/adr/0019, 0022): an Interrupt that fires the moment a
+    // Faction Signal is lowered (the "all-clear"), suspends the Run to handle it, then resumes. Where
+    // OnSignal reacts to a raise, this reacts to a stand-down — a Marine sent home by OnSignal `defend`
+    // returns to gathering when the Command Center lowers `defend`. Re-arms after each falling edge.
+    // An unset `name` is inert (ADR-0004). Like every Event: an Exec out, no Exec in.
+    ports: [
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+    params: [
+      { id: 'name', type: 'signalName', label: 'Signal' },
+    ],
+  },
+
   Move: {
     kind: 'Move',
     category: 'action',
@@ -126,6 +195,22 @@ export const NODE_KINDS = {
     ],
   },
 
+  Retreat: {
+    kind: 'Retreat',
+    category: 'action',
+    runner: 'unit',
+    title: 'Retreat',
+    // Fall back to the nearest friendly Command Center and stand beside it, dropping any combat
+    // stance on the way (docs/adr/0012). Unlike Move it needs no destination Parameter — it resolves
+    // one from live world state, so a single Flow shared by many Units routes each to its own base.
+    // The active half of the survival reflex (pair with OnDamaged or a self_health_below Branch).
+    // Completes on arrival; with no friendly Command Center it is a no-op that advances.
+    ports: [
+      { id: 'in', dir: 'in', type: 'exec', label: '' },
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+  },
+
   Train: {
     kind: 'Train',
     category: 'action',
@@ -204,6 +289,26 @@ export const NODE_KINDS = {
     ports: [
       { id: 'in', dir: 'in', type: 'exec', label: '' },
       { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+  },
+
+  SetSignal: {
+    kind: 'SetSignal',
+    category: 'action',
+    runner: 'any',
+    title: 'Set Signal',
+    // Raise or lower a Faction Signal (docs/adr/0022) — the write half of coordination, the partner
+    // to OnSignal / the signal_raised Condition. Instant: it sets the shared latch and advances.
+    // Raising a Signal already raised is a no-op (no fresh rising edge). An unset `name` is inert.
+    ports: [
+      { id: 'in', dir: 'in', type: 'exec', label: '' },
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+    // `value` raises (true, default) or lowers (false) the named Signal — rendered like OnTimer's
+    // `repeat` checkbox.
+    params: [
+      { id: 'name', type: 'signalName', label: 'Signal' },
+      { id: 'value', type: 'boolean', label: 'Raise', default: true },
     ],
   },
 

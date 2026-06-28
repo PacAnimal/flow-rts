@@ -8,7 +8,10 @@ import './editor.css';
 import { createStore } from './store.js';
 import { getNodeKind, getParams, getPort, nodeKindsForRunner } from './nodeKinds.js';
 import { CONDITIONS, getCondition } from '../conditions.js';
-import { producibleBy, producerBuildings, buildableBuildings, getBuildingType } from '../units.js';
+import {
+  producibleBy, producerBuildings, buildableBuildings, getBuildingType,
+  playerUnitTypes, playerBuildingTypes,
+} from '../units.js';
 import { researchableBy } from '../upgrades.js';
 import { RESOURCES } from '../resources.js';
 import { pickPosition } from './positionPicker.js';
@@ -597,6 +600,14 @@ export class FlowEditor {
     if (param.type === 'resource')
       return this._selectParam(node, param,
         Object.values(RESOURCES).map((r) => ({ value: r.id, label: `${r.glyph} ${r.label}` })));
+    // unitKind / buildingKind: base-wide type selectors for the unit_count / building_exists
+    // Conditions — unlike unitType/buildingType they aren't scoped to one producing Building.
+    if (param.type === 'unitKind')
+      return this._selectParam(node, param,
+        playerUnitTypes().map((u) => ({ value: u.id, label: u.label })));
+    if (param.type === 'buildingKind')
+      return this._selectParam(node, param,
+        playerBuildingTypes().map((b) => ({ value: b.id, label: b.label })));
     if (param.type === 'flowRef')
       return this._selectParam(node, param, this._unitFlowOptions());
     if (param.type === 'buildingType')
@@ -604,6 +615,7 @@ export class FlowEditor {
         buildableBuildings().map((b) => ({ value: b.id, label: b.label })));
     if (param.type === 'buildingFlowRef')
       return this._selectParam(node, param, this._buildingFlowOptions(node));
+    if (param.type === 'signalName') return this._signalNameParam(node, param);
     if (param.type === 'boolean') return this._booleanParam(node, param);
     const row = el('div', 'param-row');
     row.appendChild(el('span', 'param-label', param.label));
@@ -611,6 +623,52 @@ export class FlowEditor {
       param.type === 'number' ? this._numberInput(node, param) : this._tileButton(node, param),
     );
     return row;
+  }
+
+  // A 'signalName' Parameter (docs/adr/0022): a free-text input for a Faction Signal's name, backed
+  // by a datalist of names already used across the Library so coordinating Flows converge on one
+  // spelling without a managed roster — yet a brand-new name is still just typed in. Empty ⇒ unset.
+  _signalNameParam(node, param) {
+    const row = el('div', 'param-row');
+    row.appendChild(el('span', 'param-label', param.label));
+    const input = el('input', 'param-input');
+    input.type = 'text';
+    input.placeholder = '—';
+    input.value = (node.params && node.params[param.id]) || '';
+    const list = el('datalist');
+    list.id = `signals-${node.id}-${param.id}`;
+    for (const name of this._signalNames()) list.appendChild(el('option')).value = name;
+    input.setAttribute('list', list.id);
+    // Don't let pointer/keys on the input start a node-drag or trigger editor shortcuts.
+    input.addEventListener('pointerdown', (e) => e.stopPropagation());
+    input.addEventListener('keydown', (e) => e.stopPropagation());
+    input.addEventListener('change', () => {
+      const v = input.value.trim();
+      this.commit((m) => m.setParam(node.id, param.id, v || null));
+    });
+    row.appendChild(input);
+    row.appendChild(list);
+    return row;
+  }
+
+  // The distinct, non-empty Signal names in use across the Library — the datalist for signalName
+  // inputs. Harvests both node Parameters of type signalName (SetSignal/OnSignal) and a Branch's
+  // signal_raised Condition arg, so all three node kinds feed the same shared name set.
+  _signalNames() {
+    const names = new Set();
+    const take = (defs, params) => {
+      for (const d of defs)
+        if (d.type === 'signalName' && params && params[d.id]) names.add(params[d.id]);
+    };
+    for (const entry of this.library.list())
+      for (const node of entry.model.nodes) {
+        take(getParams(node.kind), node.params);
+        if (node.kind === 'Branch') {
+          const cond = getCondition((node.params && node.params.condition) || '');
+          if (cond) take(cond.args, node.params);
+        }
+      }
+    return [...names].sort();
   }
 
   // A 'boolean' Parameter: a checkbox (e.g. OnTimer's 'repeat', docs/adr/0019). Unset falls back to
@@ -732,6 +790,7 @@ export class FlowEditor {
     const input = el('input', 'param-input');
     input.type = 'number';
     if (param.min != null) input.min = param.min;
+    if (param.max != null) input.max = param.max;
     if (param.step != null) input.step = param.step;
     const current = node.params && node.params[param.id];
     input.value = current == null ? '' : current;

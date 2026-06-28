@@ -132,6 +132,11 @@ export class MapScene extends Phaser.Scene {
     // (docs/adr/0005). Set before spawning Units so their Runs don't begin at assignment.
     this._running = false;
 
+    // Fast-forward multiplier (×1–×4). Since the scenario is meant to play itself out from
+    // Flows authored up front, this lets the player compress wall-clock time. update() advances
+    // the whole sim `_speed` times per rendered frame (substepping, not delta-scaling).
+    this._speed = 1;
+
     // Shared Tile-occupancy layer (docs/adr/0009): `${tx},${ty}` → { kind, blocking }. Every
     // footprint feature (Deposit, Decoration, Building) registers here. Spawn rejects a
     // placement if any of its Footprint Tiles is occupied; walkable() blocks on blocking ones.
@@ -146,6 +151,11 @@ export class MapScene extends Phaser.Scene {
     // its Cargo at the command center. Shown in the materials panel. Seeded with starting alloys so
     // the player can afford an early Build before the first delivery lands (docs/adr/0018).
     this._stockpile = { alloys: 200 };
+
+    // Faction Signals (docs/adr/0022): a per-Faction blackboard of named booleans Runners raise and
+    // read to coordinate. `faction → (name → { raised, seq })`, where `seq` is a monotonic rising-edge
+    // count OnSignal watches. World state like the Stockpile — never saved; rebuilt fresh each create().
+    this._signals = new Map();
 
     // The player-wide Upgrade registry (docs/adr/0021): `done` is the set of researched Upgrade ids
     // (applied retroactively by _effectiveStats); `inProgress` maps an Upgrade id to the Building
@@ -244,6 +254,23 @@ export class MapScene extends Phaser.Scene {
       hold: (unit) => this._setCombat(unit, 'hold', null),
       attackMoveArrived: (unit) => this._movement.arrived(unit) && !(unit.combat && unit.combat.engaged),
       roamDest: (unit) => this._roamDest(unit),
+      // Fall back to base (Retreat): a standing Tile beside the nearest friendly Command Center.
+      retreatDest: (unit) => this._retreatDest(unit),
+      // Interrupt senses (docs/adr/0019): a monotonic Damage tally per Runner backs OnDamaged; the
+      // seconds until the next Scenario Wave (Infinity once they are all out) backs OnWaveIncoming.
+      damageCount: (runner) => runner._damageSeq || 0,
+      secondsUntilNextWave: () => {
+        const st = this._scenarioState;
+        if (st.next >= SCENARIO.waves.length) return Infinity;
+        return Math.max(0, SCENARIO.waves[st.next].at - st.time);
+      },
+      // Faction Signals (docs/adr/0022): SetSignal writes, the signal_raised Condition reads the
+      // standing latch, and OnSignal watches the monotonic rising-edge count. All keyed by the
+      // Runner's Faction so Player and Enemy Flows never read each other's.
+      setSignal: (runner, name, raised) => this._setSignal(runner, name, raised),
+      signalRaised: (runner, name) => this._signal(runner, name).raised,
+      signalSeq: (runner, name) => this._signal(runner, name).seq,
+      signalLoweredSeq: (runner, name) => this._signal(runner, name).loweredSeq,
       // Production (docs/adr/0013): a building-scoped Action ticked on a Building Runner.
       train: (building, params, state, dt) => this._train(building, params, state, dt),
       // Research (docs/adr/0021): a building-scoped Action that unlocks an Upgrade, mirroring Train.
@@ -299,17 +326,23 @@ export class MapScene extends Phaser.Scene {
     if (!this.units) return;
 
     if (this._running && !this._over) {
-      // Tick every Runner's Run — Units and Buildings alike (CONTEXT.md Runner). Buildings run
-      // building-scoped Flows (Train); Units run movement/gather/combat Flows.
-      for (const runner of this._runners()) this._tickRunner(runner, delta);
+      // Fast-forward by substepping: advance the entire sim `_speed` times this frame, each with
+      // the real frame delta. Substepping rather than scaling delta keeps movement steering and
+      // Tile-occupancy stable at speed — a 4× delta would let fast Units overshoot waypoints and
+      // tunnel through footprints. Sprite/DOM sync below still runs once per rendered frame.
+      for (let step = 0; step < this._speed && !this._over; step++) {
+        // Tick every Runner's Run — Units and Buildings alike (CONTEXT.md Runner). Buildings run
+        // building-scoped Flows (Train); Units run movement/gather/combat Flows.
+        for (const runner of this._runners()) this._tickRunner(runner, delta);
 
-      // Combat resolves before movement so an engaging Unit holds its ground (docs/adr/0012),
-      // then the movement pass integrates positions, then the Scenario advances its wave clock.
-      this._combat.update(this.units, delta);
-      this._movement.update(this.units, delta);
-      this._updateScenario(delta);
+        // Combat resolves before movement so an engaging Unit holds its ground (docs/adr/0012),
+        // then the movement pass integrates positions, then the Scenario advances its wave clock.
+        this._combat.update(this.units, delta);
+        this._movement.update(this.units, delta);
+        this._updateScenario(delta);
 
-      this._checkObjective();
+        this._checkObjective();
+      }
     }
 
     this._fpsEl.textContent   = `FPS: ${Math.min(30, Math.round(this.game.loop.actualFps))}`;
@@ -395,6 +428,9 @@ export class MapScene extends Phaser.Scene {
   // Apply Damage to a Runner; if it dies, remove it. The Command Center falling ends the level.
   _applyDamage(target, amount) {
     if (!target || target.health <= 0) return;
+    // Monotonic per-Runner Damage tally that backs the OnDamaged Interrupt (docs/adr/0019): the
+    // predicate fires when this count advances past what its Run has already reacted to.
+    target._damageSeq = (target._damageSeq || 0) + 1;
     const died = applyDamage(target, amount);
     this._log(`${target.label} takes ${amount} damage — Health: ${target.health}/${target.maxHealth}`);
     if (died) {
@@ -1683,6 +1719,11 @@ void main(void){
       case 'stockpile_gte':     return (this._stockpile[params.resource || 'alloys'] || 0) >= (params.amount || 0);
       case 'enemy_in_range':    return this._enemyWithin(unit, this._effectiveStats(unit.type, unit.faction)?.range || 0);
       case 'enemy_nearby':      return this._enemyWithin(unit, params.amount || params.radius || 0);
+      case 'self_health_below': return unit.maxHealth > 0 && (unit.health / unit.maxHealth) * 100 < (params.percent || 0);
+      case 'unit_count':        return this._playerUnitCount(params.unitKind) >= (params.amount || 0);
+      case 'building_exists':   return !!params.buildingKind && this.buildings.some(
+                                  (b) => b.faction === FACTION.PLAYER && b.health > 0 && b.type === params.buildingKind);
+      case 'signal_raised':     return !!params.name && this._signal(unit, params.name).raised;
       default:                  return false;
     }
   }
@@ -1694,6 +1735,65 @@ void main(void){
     for (const t of this._targetsFor(unit))
       if (Math.hypot(unit.x - t.x, unit.y - t.y) - t.radius <= reach) return true;
     return false;
+  }
+
+  // The Signal record for `name` within a Runner's Faction (docs/adr/0022), created lowered on first
+  // read. `{ raised, seq, loweredSeq }`; `seq` counts rising edges (OnSignal) and `loweredSeq` falling
+  // edges (OnSignalLowered), each bumped once per transition so an Interrupt fires once per edge.
+  _signal(runner, name) {
+    let byName = this._signals.get(runner.faction);
+    if (!byName) this._signals.set(runner.faction, (byName = new Map()));
+    let sig = byName.get(name);
+    if (!sig) byName.set(name, (sig = { raised: false, seq: 0, loweredSeq: 0 }));
+    return sig;
+  }
+
+  // Raise or lower a Faction Signal (docs/adr/0022). Bump the matching edge counter only on a real
+  // transition — lowered→raised feeds OnSignal, raised→lowered feeds OnSignalLowered — so re-setting a
+  // Signal to its current state is a no-op (no fresh fire on either edge). An unset name no-ops.
+  _setSignal(runner, name, raised) {
+    if (!name) return;
+    const sig = this._signal(runner, name);
+    if (raised && !sig.raised) sig.seq++;
+    if (!raised && sig.raised) sig.loweredSeq++;
+    sig.raised = !!raised;
+  }
+
+  // Count alive player Units, optionally of one type — backs the unit_count Condition. An unset
+  // `kind` counts the whole player army (e.g. a population cap), a set one a single type.
+  _playerUnitCount(kind) {
+    let n = 0;
+    for (const u of this.units)
+      if (u.faction === FACTION.PLAYER && u.health > 0 && (!kind || u.type === kind)) n++;
+    return n;
+  }
+
+  // Where a Retreat sends a Unit: a Walkable Tile just outside the nearest friendly Command Center's
+  // Footprint, nearest to the Unit. null when its Faction has no Command Center left (Retreat then
+  // no-ops). Resolved from live state so one shared Flow routes each Unit to its own base.
+  _retreatDest(unit) {
+    const { x: ux, y: uy } = this._unitTile(unit);
+    let best = null, bestD = Infinity;
+    for (const b of this.buildings) {
+      if (b.type !== 'command_center' || b.faction !== unit.faction || b.health <= 0) continue;
+      const d = (b.tx + b.tileW / 2 - ux) ** 2 + (b.ty + b.tileH / 2 - uy) ** 2;
+      if (d < bestD) { bestD = d; best = b; }
+    }
+    return best ? this._freeTileAround(best, ux, uy) : null;
+  }
+
+  // The Walkable Tile in the ring one Tile outside a Building's Footprint that is nearest to
+  // (fromX,fromY). Used to stand a retreating Unit beside its base; null if the ring is fully blocked.
+  _freeTileAround(b, fromX, fromY) {
+    let best = null, bestD = Infinity;
+    for (let ty = b.ty - 1; ty <= b.ty + b.tileH; ty++)
+      for (let tx = b.tx - 1; tx <= b.tx + b.tileW; tx++) {
+        const inside = tx >= b.tx && tx < b.tx + b.tileW && ty >= b.ty && ty < b.ty + b.tileH;
+        if (inside || !this.walkable(tx, ty)) continue;
+        const d = (tx - fromX) ** 2 + (ty - fromY) ** 2;
+        if (d < bestD) { best = { x: tx, y: ty }; bestD = d; }
+      }
+    return best;
   }
 
   // ── buildings ─────────────────────────────────────────────────────────────
@@ -1902,21 +2002,49 @@ void main(void){
     restart.textContent = '↻ Restart';
     restart.addEventListener('click', () => this._restartLevel());
 
+    // Speed control: one toggle per multiplier. The selected one drives update()'s substep count.
+    const speeds = document.createElement('div');
+    speeds.className = 'sim-speeds';
+    this._speedBtns = [1, 2, 3, 4].map((mult) => {
+      const b = document.createElement('button');
+      b.className = 'sim-speed';
+      b.textContent = `×${mult}`;
+      b.dataset.speed = mult;
+      b.addEventListener('click', () => this._setSpeed(mult));
+      speeds.appendChild(b);
+      return b;
+    });
+
     // These buttons are a DOM overlay above the canvas, but Phaser also listens for pointerup on
     // `window` (inputWindowEvents, to catch drags ending off-canvas). Without this, a click on a
     // button bubbles to that listener, which hit-tests a Runner underneath and fires gameobjectup —
     // popping the assign overlay "through" the button. Swallow the pointer events at the source.
-    for (const el of [start, restart]) {
+    for (const el of [start, restart, ...this._speedBtns]) {
       for (const ev of ['pointerdown', 'pointerup', 'mousedown', 'mouseup']) {
         el.addEventListener(ev, (e) => e.stopPropagation());
       }
     }
 
-    bar.append(start, restart);
+    bar.append(start, restart, speeds);
     document.body.appendChild(bar);
     this._toolbar = bar;
     this._startBtn = start;
     this._updateStartBtn();
+    this._updateSpeedBtns();
+  }
+
+  // Set the fast-forward multiplier (see update()'s substep loop). Inert once the level is decided.
+  _setSpeed(mult) {
+    if (this._over) return;
+    this._speed = mult;
+    this._updateSpeedBtns();
+  }
+
+  _updateSpeedBtns() {
+    if (!this._speedBtns) return;
+    for (const b of this._speedBtns) {
+      b.classList.toggle('active', Number(b.dataset.speed) === this._speed);
+    }
   }
 
   // Restart the level from scratch (docs/adr/0014). The scene owns DOM overlays appended to <body>

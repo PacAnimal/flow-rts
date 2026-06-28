@@ -101,7 +101,7 @@ chain runs to its end, then its Frame is popped and the suspended Frame resumes.
 one firing while a handler already runs pushes above it (LIFO). OnTimer (fires after a delay) is
 the first Interrupt. Distinct from OnStart, which fires once and roots the base Frame rather than
 preempting.
-_Avoid_: trigger, hook, signal, exception
+_Avoid_: trigger, hook, exception
 
 **Action**:
 A node kind that performs an effect in the game when executed (e.g. Move). An Action has
@@ -128,6 +128,20 @@ A named boolean test on Unit or game state that a Branch evaluates — e.g. *Car
 *Deposit adjacent*, *Stockpile ≥ N*. Chosen from a fixed set; some take an argument (an amount).
 A Condition only reads state to answer true/false; it never changes anything.
 _Avoid_: predicate, check, test, rule, trigger
+
+**Signal**:
+A named boolean shared across a Faction that Runners raise and read to coordinate without one
+Runner naming another — a Faction-wide blackboard. A Signal is either **raised** or lowered; it is
+identified by a freeform name (like a Category, the set in play is simply the distinct names used
+across Flows). Four nodes work it: the **SetSignal** Action raises or lowers one; the **OnSignal**
+Interrupt fires on its *rising edge* (the moment it goes from lowered to raised) and **OnSignalLowered**
+on its *falling edge* (the all-clear); the *signal raised* Condition reads whether it is currently
+raised. Edge (OnSignal / OnSignalLowered) is for reacting the instant a Signal is raised or lowered;
+level (the Condition) is for gating a Branch on its standing value. Signals are scoped per
+Faction, so Player and Enemy Flows never read each other's. A Signal is world state, not part of a
+Run — like the Stockpile it is never saved and resets with the level. It lets pre-authored Flows act
+as a team (a Command Center raises *defend*; every Marine's OnSignal *defend* sends it home).
+_Avoid_: flag, message, event (that is an Event), trigger (reserved), broadcast, channel, blackboard
 
 **Port**:
 A connection point on a node. Every Port is either an Exec port or a Data port, and is
