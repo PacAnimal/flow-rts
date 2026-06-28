@@ -19,12 +19,14 @@ import { chromium } from '/opt/homebrew/lib/node_modules/playwright/index.mjs';
 import { readFileSync, writeFileSync } from 'fs';
 import { resolve, basename } from 'path';
 
-const [,, glbPath, sizeArg, outArg, framesArg] = process.argv;
+const [,, glbPath, sizeArg, outArg, framesArg, cycleRangeArg, exposureArg, saturationArg] = process.argv;
 if (!glbPath) {
-  console.error('Usage: node render_sprites.mjs <model.glb> [frameSize] [output.png] [numAnimFrames]');
+  console.error('Usage: node render_sprites.mjs <model.glb> [frameSize] [output.png] [numAnimFrames] [cycleRange] [exposure] [saturation]');
   process.exit(1);
 }
 const numAnimFrames = parseInt(framesArg || '1');
+const exposure      = exposureArg  != null ? parseFloat(exposureArg)  : 1.1;
+const saturation    = saturationArg != null ? parseFloat(saturationArg) : 1.5;
 
 const rawName = basename(glbPath, '.glb');
 // for canonical filenames, derive identity from the parent dir
@@ -86,7 +88,7 @@ renderer.setClearColor(0x000000, 0);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 // Reinhard preserves hue fidelity — ACES aggressively desaturates blues/cyans
 renderer.toneMapping = THREE.ReinhardToneMapping;
-renderer.toneMappingExposure = 1.1;
+renderer.toneMappingExposure = ${exposure};
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -194,9 +196,9 @@ const postMat = new THREE.ShaderMaterial({
       compress = mix(compress, 1.0, bluedom);
       rgb *= compress;
 
-      // saturation boost
+      // saturation boost (per-sprite multiplier passed from JS)
       float grey = luma(rgb);
-      rgb = mix(vec3(grey), rgb, 1.5);
+      rgb = mix(vec3(grey), rgb, ${saturation.toFixed(4)});
       rgb = clamp(rgb, 0.0, 1.0);
 
       rgb *= 1.0 - edge * 0.55;
@@ -443,11 +445,13 @@ await page.waitForFunction(() => window.__threeReady === true, { timeout: 30_000
 await page.evaluate(({ glb, tex }) => window.loadModel({ glb, tex }), { glb: glbBase64, tex: texB64 });
 
 const isHover = name.includes('reaper');
-// walk: sample first 1/3 of the clip (Meshy walk clips have 3 strides — one stride = LLL+RRR)
-// hover: sample full clip — custom thrust cycle is already 1 thrust-and-recover period
-const cycleRange = isHover ? 1.0 : (1 / 3);
+// default cycleRange: full clip for custom single-cycle animations (hover/walk baked in rig_*.mjs);
+// 1/3 for raw Meshy walk clips which contain 3 strides — one stride = first 1/3 of the clip.
+// override via the optional 6th argument.
+const cycleRange = cycleRangeArg != null ? parseFloat(cycleRangeArg)
+  : isHover ? 1.0 : (1 / 3);
 const rotOffset  = 0;
-console.log(`Rendering ${name} — ${numAnimFrames} anim frame(s), 16 dirs, cycleRange=${cycleRange.toFixed(3)}, rotOffset=${rotOffset.toFixed(2)}, post-process...`);
+console.log(`Rendering ${name} — ${numAnimFrames} anim frame(s), 16 dirs, cycleRange=${cycleRange.toFixed(3)}, exposure=${exposure.toFixed(2)}, sat=${saturation.toFixed(2)}, post-process...`);
 const sheetDataUrl = await page.evaluate(
   ({ nf, ih, cr, ro }) => window.renderSheet(nf, ih, cr, ro),
   { nf: numAnimFrames, ih: isHover, cr: cycleRange, ro: rotOffset }

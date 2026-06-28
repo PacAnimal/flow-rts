@@ -16,5 +16,7 @@ concepts/gen_reaper_model.py
 scripts/gen_animations.py
 models/reaper/rigged.glb
 models/reaper/with_legs.glb
+models/biter/rigged.glb
 models/*/animated.glb
 reaper-debug/
+biter-debug/

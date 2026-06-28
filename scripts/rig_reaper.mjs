@@ -365,7 +365,7 @@ execFileSync('node', ['scripts/test_rig.mjs'], { stdio: 'inherit' });
 console.log('\n── sprite sheet ──');
 execFileSync('node', [
   'scripts/render_sprites.mjs',
-  'models/reaper/animated.glb', '512', 'sprites/reaper_sheet.png', '8',
+  'models/reaper/animated.glb', '256', 'sprites/reaper_sheet.png', '8',
 ], { stdio: 'inherit' });
 
 console.log('\nDone.');
