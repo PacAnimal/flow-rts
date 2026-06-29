@@ -10,11 +10,14 @@ function randomBobPeriod() { return (3 + Math.random() * 2) * 1000; } // 3–5 s
 export class Reaper extends Unit {
   constructor(scene, x, y) {
     super(scene, x, y, 'reaper', TILE * 1.1, FACTION.PLAYER, 6, 16, 8);
-    // hover shadow: wider, offset down to sell the levitation gap
-    this._shadowW     = 2.5;
-    this._shadowH     = 0.55;
-    this._shadowAlpha = 0.80;
-    this._shadowYOff  = 22;
+    // hover shadow: wider, with gap below feet to sell the levitation
+    // reaper sprite has 90/256 ≈ 35% transparent bottom padding; _shadowFeetFrac matches that
+    // so feetY lands at the actual visual feet, then _shadowYOff adds the intentional hover gap
+    this._shadowW        = 1.2;
+    this._shadowH        = 0.40;
+    this._shadowAlpha    = 0.80;
+    this._shadowFeetFrac = 0.35;
+    this._shadowYOff     = 18;
     // procedural hover bob — phase offset is random so multiple reapers don't sync up
     this._bobPhase  = Math.random() * Math.PI * 2;
     this._bobPeriod = randomBobPeriod();

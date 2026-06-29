@@ -39,10 +39,13 @@ export class Unit {
     this.carryCapacity = def ? def.carryCapacity : 0;
 
     this._shadow = scene.add.image(x, y, 'unit_shadow').setDepth(1).setOrigin(0.5, 0.5);
-    this._shadowAlpha = 1.0;
-    this._shadowW     = 2.0;  // ellipse width as fraction of displaySize
-    this._shadowH     = 0.55; // ellipse height as fraction of displaySize
-    this._shadowYOff  = 0;    // extra y offset (reapers use this to show hover gap)
+    this._shadowAlpha    = 1.0;
+    this._shadowW        = 0.85; // ellipse width as fraction of displaySize
+    this._shadowH        = 0.40; // ellipse height as fraction of displaySize
+    // fraction of displaySize to offset shadow UP from sprite anchor (= sprite's transparent bottom
+    // margin / 256); ground units are ~0.11, hover units with large margins override this
+    this._shadowFeetFrac = 0.11;
+    this._shadowYOff     = 0;    // extra offset below the feet (positive = hovering gap)
 
     this.sprite = dirCount === 16
       ? scene.add.image(x, y, texturePrefix, FRAME16['S'])
@@ -63,7 +66,8 @@ export class Unit {
   syncShadow() {
     const w = this._displaySize * this._shadowW;
     const h = this._displaySize * this._shadowH;
-    this._shadow.setPosition(this.x, this.y - 2 + this._shadowYOff);
+    const feetY = this.y - this._displaySize * this._shadowFeetFrac;
+    this._shadow.setPosition(this.x, feetY + this._shadowYOff);
     this._shadow.setDisplaySize(w, h);
     this._shadow.setAlpha(this._shadowAlpha);
   }

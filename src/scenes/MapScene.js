@@ -86,7 +86,7 @@ export class MapScene extends Phaser.Scene {
     this.load.image('barracks', '/sprites/barracks.png');
     this.load.image('factory', '/sprites/factory.png');
     // 8-direction units: individual texture per direction + dead sprite
-    const UNIT_TYPES_8 = ['worker', 'mech', 'tank', 'chojin', 'heavy-chojin'];
+    const UNIT_TYPES_8 = ['mech', 'tank', 'chojin', 'heavy-chojin'];
     const UNIT_DIRS    = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'dead'];
     for (const type of UNIT_TYPES_8)
       for (const d of UNIT_DIRS) this.load.image(`${type}_${d}`, `/sprites/${type}_${d}.png`);
@@ -102,6 +102,9 @@ export class MapScene extends Phaser.Scene {
     // biter: 256px frames, 16 dirs × 8 walk frames
     this.load.spritesheet('biter', '/sprites/biter_sheet.png', { frameWidth: 256, frameHeight: 256 });
     this.load.image('biter_dead', '/sprites/biter_dead.png');
+    // worker: 256px frames, 16 dirs × 8 walk frames
+    this.load.spritesheet('worker', '/sprites/worker_sheet.png', { frameWidth: 256, frameHeight: 256 });
+    this.load.image('worker_dead', '/sprites/worker_dead.png');
     for (const key of DECORATIONS.tree.sprites) this.load.image(key, `/sprites/${key}.png`);
     for (const key of DECORATIONS.obstacle.sprites) this.load.image(key, `/sprites/decor2/${key}.png`);
     for (const key of DECORATIONS.groundDecor.sprites) this.load.image(key, `/sprites/decor2/${key}.png`);

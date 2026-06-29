@@ -19,14 +19,20 @@ import { chromium } from '/opt/homebrew/lib/node_modules/playwright/index.mjs';
 import { readFileSync, writeFileSync } from 'fs';
 import { resolve, basename } from 'path';
 
-const [,, glbPath, sizeArg, outArg, framesArg, cycleRangeArg, exposureArg, saturationArg] = process.argv;
+const [,, glbPath, sizeArg, outArg, framesArg, cycleRangeArg, exposureArg, saturationArg, edgeArg, hlArg] = process.argv;
 if (!glbPath) {
-  console.error('Usage: node render_sprites.mjs <model.glb> [frameSize] [output.png] [numAnimFrames] [cycleRange] [exposure] [saturation]');
+  console.error('Usage: node render_sprites.mjs <model.glb> [frameSize] [output.png] [numAnimFrames] [cycleRange] [exposure] [saturation] [edgeStrength] [hlCompress]');
   process.exit(1);
 }
 const numAnimFrames = parseInt(framesArg || '1');
 const exposure      = exposureArg  != null ? parseFloat(exposureArg)  : 1.1;
 const saturation    = saturationArg != null ? parseFloat(saturationArg) : 1.5;
+// edgeStrength: 0.55 is good for organic/creature models; reduce for mechanical surfaces
+// to prevent Sobel edge darkening from turning saturated colors muddy
+const edgeStrength  = edgeArg != null ? parseFloat(edgeArg) : 0.55;
+// hlCompress: floor brightness for highlights; 0.55 is aggressive (squashes bright yellows
+// to orange-brown); use 0.80 or higher for saturated mechanical/painted surfaces
+const hlCompress    = hlArg != null ? parseFloat(hlArg) : 0.55;
 
 const rawName = basename(glbPath, '.glb');
 // for canonical filenames, derive identity from the parent dir
@@ -192,7 +198,7 @@ const postMat = new THREE.ShaderMaterial({
       // highlight compression on the final mix
       float lum = luma(rgb);
       float bluedom = smoothstep(0.0, 0.12, rgb.b - max(rgb.r, rgb.g));
-      float compress = mix(1.0, 0.55, smoothstep(0.55, 1.0, lum));
+      float compress = mix(1.0, ${hlCompress.toFixed(4)}, smoothstep(0.55, 1.0, lum));
       compress = mix(compress, 1.0, bluedom);
       rgb *= compress;
 
@@ -201,7 +207,7 @@ const postMat = new THREE.ShaderMaterial({
       rgb = mix(vec3(grey), rgb, ${saturation.toFixed(4)});
       rgb = clamp(rgb, 0.0, 1.0);
 
-      rgb *= 1.0 - edge * 0.55;
+      rgb *= 1.0 - edge * ${edgeStrength.toFixed(4)};
 
       gl_FragColor = vec4(rgb, col.a);
     }
