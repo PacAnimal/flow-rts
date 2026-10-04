@@ -42,6 +42,11 @@ is shaped the way it is. Consult them before non-trivial changes:
   them constantly (e.g. `docs/adr/0006`). When you touch a subsystem, the relevant ADR explains the
   constraint you must preserve. Adding a significant architectural decision means writing a new ADR.
 
+`docs/BACKLOG.md` holds candidate work — each task with its rationale, the files it touches, whether
+it needs an ADR, and the gotchas found while reading the code. It is *not* a source of truth and
+nothing in it is committed to: where it contradicts CONTEXT.md or an ADR, those win. Start there
+when asked "what's next", and keep its Done table and Found-while-working section current.
+
 ## Architecture
 
 ### The central seam: engine-agnostic interpreter ↔ injected world (ADR-0006)
