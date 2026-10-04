@@ -17,8 +17,22 @@ function ensureDom() {
   panel = document.createElement('div');
   panel.className = 'assign-panel';
   overlay.appendChild(panel);
-  // Click on the backdrop (outside the panel) closes without changing anything.
-  overlay.addEventListener('pointerdown', (e) => { if (e.target === overlay) close(); });
+  // Click on the backdrop (outside the panel) closes without changing anything. Hide on press, but
+  // keep map input disabled until that click's release has been handled: re-enabling it on
+  // pointerdown would let the matching pointerup reach Phaser as a gameobjectup on whatever Runner
+  // sits under the cursor and re-open the overlay for it. Deferred a task so Phaser's own up
+  // handler (mouseup, dispatched after pointerup) still sees input disabled.
+  overlay.addEventListener('pointerdown', (e) => {
+    if (e.target !== overlay) return;
+    overlay.classList.add('hidden');
+    const release = () => {
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('pointercancel', release);
+      setTimeout(() => setVisible(false));
+    };
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
+  });
   document.body.appendChild(overlay);
 }
 
