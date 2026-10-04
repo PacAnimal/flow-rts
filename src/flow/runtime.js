@@ -8,7 +8,9 @@
 // `{ current, state }` — `current` is the id of the node the cursor sits on, `state` its scratch —
 // so the rest of the app reads the running cursor exactly as it always has. Suspended Frames
 // beneath it live in `run.stack` (each `{ current, state, interrupt }`, bottom-first), and
-// `run.timers` holds a per-Interrupt clock keyed by node id. `status` is 'running' | 'idle' |
+// `run.timers` holds a per-Interrupt clock keyed by node id, and `run.reason` is the active
+// Frame's parked-for reason (docs/adr/0023), refreshed every tick the cursor stays put and cleared
+// the moment it moves. `status` is 'running' | 'idle' |
 // 'halted'. The active Frame reads the LIVE model each tick, so edits take effect as the Runner
 // advances; deleting the active node discards that Frame and resumes the one beneath (ADR-0005,
 // 0019). An Interrupt (OnTimer) coming due suspends the active Frame — the world halts its
@@ -19,7 +21,16 @@
 // Each executor runs one node and reports back: either still RUNNING (wait for next frame,
 // keep the cursor here) or DONE with the Exec output port to follow. Keyed by node kind so
 // node descriptors (nodeKinds.js) stay pure, serializable schema (docs/adr/0006).
-const RUNNING = { status: 'running' };
+//
+// A RUNNING result may carry a `reason` (docs/adr/0023): one short phrase saying WHY the cursor is
+// parked, which tickRun copies onto `run.reason` for the inspector to show. A parked cursor is
+// otherwise indistinguishable whether it is working or stuck — Gather looks identical while
+// walking, while harvesting, and while waiting because every Deposit in reach is Claimed. Reasons
+// the executor can see for itself (walking, counting down) are literals here; reasons only the
+// world knows are written by the world into the scratch `state` it is handed and read back out of
+// it — the same scratch Train/Research already use for funding and timing.
+const RUNNING = { status: 'running', reason: '' };
+const running = (reason) => (reason ? { status: 'running', reason } : RUNNING);
 const done = (out = 'out') => ({ status: 'done', out });
 
 const EXECUTORS = {
@@ -41,7 +52,7 @@ const EXECUTORS = {
     const goal = node.params?.spread ? world.claimMoveTile(runner, dest) : dest;
     // Loose arrival: many Units share one rally/delivery Tile, so "near enough" beats shoving
     // over the exact Tile (docs/adr/0017).
-    return world.moveToward(runner, goal, true) ? done() : RUNNING;
+    return world.moveToward(runner, goal, true) ? done() : running(`walking to (${goal.x}, ${goal.y})`);
   },
 
   // Gather from a Deposit (docs/adr/0008, 0017). A gathering Worker CLAIMS the nearest unclaimed
@@ -55,16 +66,19 @@ const EXECUTORS = {
   // Claim). With no Deposit ever in reach (field exhausted, or rallied too far) the Worker waits.
   Gather: (node, runner, world, dt, state) => {
     if (!state.claim) {
-      state.claim = world.claimDeposit(runner);
-      if (!state.claim) return RUNNING; // nothing free in reach — wait in place
+      // The world writes WHY no Claim was free into the scratch (docs/adr/0023) — every Deposit
+      // claimed, none in reach, Cargo full — which is the difference between a mis-authored rally
+      // and a Worker correctly queueing for a busy patch.
+      state.claim = world.claimDeposit(runner, state);
+      if (!state.claim) return running(state.reason); // nothing free in reach — wait in place
     }
     if (!state.arrived) {
-      if (!world.moveToward(runner, state.claim.dest)) return RUNNING; // approach the Deposit
+      if (!world.moveToward(runner, state.claim.dest)) return running('walking to the Deposit');
       state.arrived = true;
       state.duration = state.claim.gatherTime * 1000; // start the harvest timer + progress bar
     }
     state.elapsed = (state.elapsed || 0) + dt;
-    if (state.elapsed < state.duration) return RUNNING;
+    if (state.elapsed < state.duration) return running('gathering');
     world.collect(runner, state.claim.handle);
     return done();
   },
@@ -77,7 +91,7 @@ const EXECUTORS = {
     if (state.duration === undefined) state.duration = world.deliverTime(runner);
     if (!state.duration) return done(); // nothing to deliver — advance immediately
     state.elapsed = (state.elapsed || 0) + dt;
-    if (state.elapsed < state.duration) return RUNNING;
+    if (state.elapsed < state.duration) return running('handing Cargo to the Stockpile');
     world.deliver(runner);
     return done();
   },
@@ -89,7 +103,8 @@ const EXECUTORS = {
     const dest = node.params?.destination;
     if (!dest) return done();
     world.attackMove(runner, dest);
-    return world.attackMoveArrived(runner) ? done() : RUNNING;
+    if (world.attackMoveArrived(runner)) return done();
+    return running(world.engaged?.(runner) ? 'engaging an Enemy' : `advancing on (${dest.x}, ${dest.y})`);
   },
 
   // Hold position and attack the nearest Enemy in range (docs/adr/0012). With no duration it is a
@@ -97,10 +112,11 @@ const EXECUTORS = {
   // long (timed in the per-node scratch state, like Wait) and then advances, so defence composes.
   Hold: (node, runner, world, dt, state) => {
     world.hold(runner);
+    const why = world.engaged?.(runner) ? 'engaging an Enemy' : 'holding position — nothing in range';
     const seconds = node.params?.duration;
-    if (!seconds || seconds <= 0) return RUNNING; // hold forever (default)
+    if (!seconds || seconds <= 0) return running(why); // hold forever (default)
     state.elapsed = (state.elapsed || 0) + dt;
-    return state.elapsed >= seconds * 1000 ? done() : RUNNING;
+    return state.elapsed >= seconds * 1000 ? done() : running(why);
   },
 
   // Fall back to the nearest friendly Command Center (docs/adr/0012). The world resolves a standing
@@ -110,21 +126,22 @@ const EXECUTORS = {
   Retreat: (node, runner, world, dt, state) => {
     if (state.dest === undefined) state.dest = world.retreatDest(runner);
     if (!state.dest) return done();
-    return world.moveToward(runner, state.dest, true) ? done() : RUNNING;
+    return world.moveToward(runner, state.dest, true)
+      ? done() : running('falling back to the Command Center');
   },
 
   // Produce a Unit from a Building (docs/adr/0013). The world blocks until the Stockpile affords
   // the cost, then waits the build time and spawns; it returns true only once the Unit is out.
   // Funding/timing live in the per-node scratch state, so re-assignment resets cleanly.
   Train: (node, runner, world, dt, state) =>
-    world.train(runner, node.params || {}, state, dt) ? done() : RUNNING,
+    world.train(runner, node.params || {}, state, dt) ? done() : running(state.reason),
 
   // Research an Upgrade from a Building (docs/adr/0021), mirroring Train. The world blocks until the
   // Stockpile affords the Upgrade (or another Building researching it finishes), waits the research
   // time, then unlocks it player-wide; it returns true once the Upgrade is available (or instantly
   // when already unlocked / nothing selected). Funding/timing live in the per-node scratch state.
   Research: (node, runner, world, dt, state) =>
-    world.research(runner, node.params || {}, state, dt) ? done() : RUNNING,
+    world.research(runner, node.params || {}, state, dt) ? done() : running(state.reason),
 
   // Place a Construction Site of the chosen building type at the chosen Footprint, then advance
   // (docs/adr/0018). The world spends + places when it can; an unaffordable or blocked placement is
@@ -142,16 +159,19 @@ const EXECUTORS = {
   // and advances the Worker. `slot`/`arrived` live in the per-node scratch so re-assigning resets.
   Construct: (node, runner, world, dt, state) => {
     if (!state.slot) {
-      state.slot = world.claimBuildSlot(runner);
-      if (!state.slot) return RUNNING; // nothing in reach needs builders — wait in place
+      // As with Gather, the world says why no slot was free (docs/adr/0023).
+      state.slot = world.claimBuildSlot(runner, state);
+      if (!state.slot) return running(state.reason); // nothing in reach needs builders — wait
     }
     if (!state.arrived) {
       // Loose arrival: up to four Workers crowd one Site, so "near enough to build" beats fighting
       // over one exact Tile (docs/adr/0017, 0018).
-      if (!world.moveToward(runner, state.slot.dest, true)) return RUNNING; // approach the Site
+      if (!world.moveToward(runner, state.slot.dest, true)) {
+        return running('walking to the Construction Site'); // approach the Site
+      }
       state.arrived = true;
     }
-    return world.construct(runner, state.slot.handle, dt) ? done() : RUNNING;
+    return world.construct(runner, state.slot.handle, dt, state) ? done() : running(state.reason);
   },
 
   // Pick a random nearby walkable tile, attack-move there (engaging anything en route), and
@@ -162,9 +182,10 @@ const EXECUTORS = {
       state.roaming = true;
       const dest = world.roamDest ? world.roamDest(runner) : null;
       if (dest) world.attackMove(runner, dest);
-      return RUNNING;
+      return running('roaming');
     }
-    return world.attackMoveArrived(runner) ? done() : RUNNING;
+    if (world.attackMoveArrived(runner)) return done();
+    return running(world.engaged?.(runner) ? 'engaging an Enemy' : 'roaming');
   },
 
   // Raise or lower a Faction Signal (docs/adr/0022), then advance — instant. The world owns the
@@ -181,7 +202,7 @@ const EXECUTORS = {
     const seconds = node.params?.duration;
     if (!seconds || seconds <= 0) return done();
     state.elapsed = (state.elapsed || 0) + dt;
-    return state.elapsed >= seconds * 1000 ? done() : RUNNING;
+    return state.elapsed >= seconds * 1000 ? done() : running('waiting');
   },
 
   // Evaluate the node's Condition and route to the 'yes' or 'no' Exec output (docs/adr/0010).
@@ -299,6 +320,7 @@ function pushHandler(run, node, runner, world) {
   world.suspendRunner?.(runner);
   run.current = node.id;
   run.state = {};
+  run.reason = ''; // a fresh handler Frame has not parked anywhere yet (docs/adr/0023)
   run.activeInterrupt = node.id;
 }
 
@@ -339,6 +361,7 @@ function fireDueInterrupts(run, runner, model, world, dt) {
 function endActive(run, model, byDeletion) {
   run.current = null;
   run.state = {};
+  run.reason = '';
   run.activeInterrupt = null;
   if (anyArmable(run, model)) run.status = 'running';
   else run.status = byDeletion ? 'halted' : 'idle';
@@ -353,6 +376,7 @@ export function startRun(flowId, model) {
     flowId,
     current: onStart ? onStart.id : null,
     state: {},
+    reason: '',
     status: 'running',
     stack: [],
     timers: {},
@@ -364,7 +388,8 @@ export function startRun(flowId, model) {
 
 // Advance `run` one frame (docs/adr/0005, 0019). First fire any due Interrupts (which may push
 // handler Frames), then step the active Frame: instantaneous nodes chain within the tick; a node
-// that returns RUNNING parks the cursor; reaching a node with nothing wired ends the active Frame,
+// that returns RUNNING parks the cursor (and its `reason`, if any, lands on `run.reason`, ADR-0023);
+// reaching a node with nothing wired ends the active Frame,
 // popping to the suspended Frame beneath (resume) or ending the Run; a deleted active node discards
 // its Frame the same way. `maxSteps` guards an instant-only cycle from spinning forever in a tick.
 export function tickRun(run, runner, model, world, dt) {
@@ -383,7 +408,10 @@ export function tickRun(run, runner, model, world, dt) {
 
     const exec = EXECUTORS[node.kind] || done; // unknown/effectless kind: pass through
     const res = exec(node, runner, world, dt, run.state);
-    if (res.status === 'running') break;    // park the cursor; resume next frame
+    if (res.status === 'running') {         // park the cursor; resume next frame
+      run.reason = res.reason || '';        // why it is parked, for the inspector (docs/adr/0023)
+      break;
+    }
 
     const conn = model.connections.find(
       (c) => c.from.node === node.id && c.from.port === res.out,
@@ -393,7 +421,8 @@ export function tickRun(run, runner, model, world, dt) {
       continue;                             // resumed Frame continues this tick
     }
     run.current = conn.to.node;
-    run.state = {}; // fresh scratch for the node just entered
+    run.state = {};  // fresh scratch for the node just entered
+    run.reason = ''; // and no reason until that node parks (docs/adr/0023)
     if (++steps > maxSteps) { run.status = 'idle'; break; }
   }
   return run;

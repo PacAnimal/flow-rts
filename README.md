@@ -32,21 +32,25 @@ tilemap, Buildings, Units and Decorations. Handy when iterating on the GLSL.
 
 ## Playing a match
 
-1. **Open the editor** — the button on the canvas, or press `F`.
-2. **Pick or create a Flow** in the Library panel. A Flow targets one Runner kind (Unit or
+1. **Read the briefing.** The Wave panel on the left lists the Scenario's whole timeline — when
+   each Wave lands, how many Enemies of which type, and the map edge they come from. That is the
+   challenge you are authoring against; it folds down to a next-Wave countdown once you press Start.
+2. **Open the editor** — the button on the canvas, or press `F`.
+3. **Pick or create a Flow** in the Library panel. A Flow targets one Runner kind (Unit or
    Building); a Building-Flow further targets one building type, which fixes the Units its Train
    node offers. Flows can be filed under a freeform Category to keep the Library tidy.
-3. **Author it.** Drag node kinds from the palette onto the Canvas, wire Exec output → Exec input,
+4. **Author it.** Drag node kinds from the palette onto the Canvas, wire Exec output → Exec input,
    and fill in each node's Parameters (a Move destination is picked by clicking a Tile on the map).
    There is no loop node: a loop is a Connection wired *backward* to an earlier node, gated by a
    Branch and paced by a Wait. `Ctrl/Cmd+Z` undoes, `Delete` removes the selection, `Esc` clears it.
-4. **Assign it.** Close the editor and click a Runner. The assign overlay lists only the Flows that
+5. **Assign it.** Close the editor and click a Runner. The assign overlay lists only the Flows that
    match that Runner — Unit-Flows for Units, this-building-type Flows for Buildings. Assigning
    replaces any previous Assignment and starts a fresh Run.
-5. **Press ▶ Start.** The toolbar also carries Pause, ↻ Restart, and a ×1–×4 speed control. While
+6. **Press ▶ Start.** The toolbar also carries Pause, ↻ Restart, and a ×1–×4 speed control. While
    the simulation runs, clicking any Runner docks the editor beside the map as a read-only
-   inspector with that Runner's current node highlighted — the way to see what your Flow is
-   actually doing.
+   inspector with that Runner's current node highlighted, plus a status line saying what that node
+   is doing *and why it is waiting* — "every Deposit in reach is claimed by another Worker",
+   "waiting for 30 alloys" (ADR-0023). That is the way to see what your Flow is actually doing.
 
 Drag the map to pan, scroll to zoom. The Library persists to `localStorage`, so your Flows survive
 a reload. Runs do not: reloading restarts every Runner from its Flow's On Start.
@@ -168,7 +172,7 @@ type is a new table entry:
 
 ```
 src/            game source (see module map above)
-docs/adr/       22 Architecture Decision Records
+docs/adr/       23 Architecture Decision Records
 CONTEXT.md      the domain glossary — the source of truth for terminology
 CLAUDE.md       working notes for Claude Code
 index.html      Vite entry
@@ -187,7 +191,7 @@ the way it is:
 - **`CONTEXT.md`** — the domain glossary. Terminology is enforced with discipline: every term has a
   precise meaning and a list of words to avoid. A Flow is not a "graph"; a Deposit is not a
   "resource node". The vocabulary is expected to hold in code, identifiers and comments.
-- **`docs/adr/`** — 22 Architecture Decision Records. Code comments cite them constantly (e.g.
+- **`docs/adr/`** — 23 Architecture Decision Records. Code comments cite them constantly (e.g.
   `docs/adr/0006`); when you touch a subsystem, the matching ADR explains the constraint you need
   to preserve. A significant new architectural decision means a new ADR.
 

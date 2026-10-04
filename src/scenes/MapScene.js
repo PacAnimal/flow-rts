@@ -31,6 +31,14 @@ import '../flow/editor.css'; // shared overlay chrome — styles the Start/Pause
 const MAP_W = 120;
 const MAP_H = 90;
 
+// A Wave's spawn-point key (src/scenario.js) as the compass word a player would use for that map
+// edge — 'top' is the north edge of the map, and "from the north" is how the briefing reads.
+const COMPASS = { left: 'west', right: 'east', top: 'north', bottom: 'south' };
+const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+// Write only on change: the HUD text below is refreshed every frame, and an untouched textContent
+// costs nothing while an assigned one invalidates layout.
+const setText = (el, text) => { if (el.textContent !== text) el.textContent = text; };
+
 // Unit type id → class, for spawning produced/Enemy Units by type (docs/adr/0013, 0014).
 const UNIT_CLASS = { worker: Worker, marine: Marine, zapper: Zapper, reaper: Reaper, tank: Tank, mech: Mech, chojin: Chojin, 'heavy-chojin': HeavyChojin };
 // Building type key → entity class, for raising a finished Building from a Construction Site (docs/adr/0018).
@@ -247,7 +255,9 @@ export class MapScene extends Phaser.Scene {
       claimMoveTile: (unit, dest) => this._claimMoveTile(unit, dest),
       position: (unit) => ({ x: unit.x, y: unit.y }),
       walkable: (tx, ty) => this.walkable(tx, ty),
-      claimDeposit: (unit) => this._claimDeposit(unit),
+      // The claim primitives take the node's scratch so they can write back WHY no Claim was
+      // free (docs/adr/0023); the executor reads it out and parks with that reason.
+      claimDeposit: (unit, state) => this._claimDeposit(unit, state),
       collect: (unit, deposit) => this._collect(unit, deposit),
       deliver: (unit) => this._deliver(unit),
       deliverTime: (unit) => this._deliverDuration(unit),
@@ -257,6 +267,9 @@ export class MapScene extends Phaser.Scene {
       hold: (unit) => this._setCombat(unit, 'hold', null),
       attackMoveArrived: (unit) => this._movement.arrived(unit) && !(unit.combat && unit.combat.engaged),
       roamDest: (unit) => this._roamDest(unit),
+      // Is this Unit currently trading blows? Set by the CombatSystem (docs/adr/0012); read only
+      // so Hold/Attack-Move/Roam can say "engaging an Enemy" rather than "standing there".
+      engaged: (unit) => !!(unit.combat && unit.combat.engaged),
       // Fall back to base (Retreat): a standing Tile beside the nearest friendly Command Center.
       retreatDest: (unit) => this._retreatDest(unit),
       // Interrupt senses (docs/adr/0019): a monotonic Damage tally per Runner backs OnDamaged; the
@@ -280,8 +293,8 @@ export class MapScene extends Phaser.Scene {
       research: (building, params, state, dt) => this._research(building, params, state, dt),
       // Construction (docs/adr/0018): Build places a Site; Construct claims a build slot and raises it.
       build: (building, params) => this._build(building, params),
-      claimBuildSlot: (unit) => this._claimBuildSlot(unit),
-      construct: (unit, site, dt) => this._construct(unit, site, dt),
+      claimBuildSlot: (unit, state) => this._claimBuildSlot(unit, state),
+      construct: (unit, site, dt, state) => this._construct(unit, site, dt, state),
       // An Interrupt preempting a Frame halts that Frame's in-flight intent (docs/adr/0019): drop
       // any movement goal so the Runner stops in place and clear any combat stance, so the handler
       // starts clean. Resuming re-asserts intent — Move/Hold/AttackMove re-issue it every tick — so
@@ -304,6 +317,7 @@ export class MapScene extends Phaser.Scene {
     this._buildStartButton();
     this._buildMaterialsPanel();
     this._buildUpgradesPanel();
+    this._buildWavePanel();
     this._buildBanner();
     this._showTitleCard();
 
@@ -313,7 +327,7 @@ export class MapScene extends Phaser.Scene {
       clearTimeout(this._titleCardT1);
       clearTimeout(this._titleCardT2);
       this._titleCard?.remove();
-      for (const el of [this._uiOverlay, this._toolbar, this._materialsPanel, this._upgradesPanel, this._banner, this._statsEl]) {
+      for (const el of [this._uiOverlay, this._toolbar, this._materialsPanel, this._upgradesPanel, this._wavePanel, this._banner, this._statsEl]) {
         el?.remove();
       }
       if (this._onOverlayVisibility) {
@@ -350,6 +364,7 @@ export class MapScene extends Phaser.Scene {
 
     this._fpsEl.textContent   = `FPS: ${Math.min(30, Math.round(this.game.loop.actualFps))}`;
     this._unitsEl.textContent = `Units: ${this.units.length}`;
+    this._updateWavePanel();
 
     // DOM labels and health bars must track screen position every frame regardless of running state,
     // since the camera can pan/zoom while paused.
@@ -525,14 +540,20 @@ export class MapScene extends Phaser.Scene {
     if (!def) return true; // nothing selected — advance
     if (def.producedBy !== building.type) return true; // this Building can't make it (docs/adr/0016)
     if (!state.started) {
-      if (!this._canAfford(def.cost)) return false; // block until affordable
+      if (!this._canAfford(def.cost)) {       // block until affordable (docs/adr/0023 for the why)
+        state.reason = `waiting for ${this._shortfall(def.cost)}`;
+        return false;
+      }
       this._spend(def.cost);
       state.started = true;
       state.elapsed = 0;
       state.duration = def.buildTime * 1000; // read by the building progress bar + inspector
     }
     state.elapsed += dt;
-    if (state.elapsed < def.buildTime * 1000) return false; // building…
+    if (state.elapsed < def.buildTime * 1000) {
+      state.reason = `training a ${def.label}`;
+      return false;                           // building…
+    }
     this._spawnTrainedUnit(building, def, params.assignFlow || null);
     return true;
   }
@@ -547,6 +568,18 @@ export class MapScene extends Phaser.Scene {
     for (const [res, amt] of Object.entries(cost || {}))
       this._stockpile[res] = (this._stockpile[res] || 0) - amt;
     this._updateMaterialsPanel();
+  }
+
+  // How much Stockpile is still missing before `cost` can be paid, as "30 alloys, 10 sludge" —
+  // the human-readable half of _canAfford. Feeds the reason a blocked Train/Research parks with
+  // (docs/adr/0023), which is the difference between "my Barracks is broken" and "my economy is".
+  _shortfall(cost) {
+    const parts = [];
+    for (const [res, amt] of Object.entries(cost || {})) {
+      const missing = amt - (this._stockpile[res] || 0);
+      if (missing > 0) parts.push(`${missing} ${(getResource(res)?.label || res).toLowerCase()}`);
+    }
+    return parts.join(', ') || 'nothing';
   }
 
   // The effective stats of a Unit type for a Faction (docs/adr/0021): the base data-table entry with
@@ -590,8 +623,14 @@ export class MapScene extends Phaser.Scene {
       // Another Building already researching it? Block until it completes (docs/adr/0021) — don't pay
       // twice. The Claim frees if that Building dies (forfeit), letting this one start fresh.
       const claimant = this._upgrades.inProgress.get(up.id);
-      if (claimant && claimant !== building) return false;
-      if (!this._canAfford(up.cost)) return false; // block until affordable, like Train
+      if (claimant && claimant !== building) {
+        state.reason = `${claimant.label} is already researching ${up.label}`;
+        return false;
+      }
+      if (!this._canAfford(up.cost)) {             // block until affordable, like Train
+        state.reason = `waiting for ${this._shortfall(up.cost)}`;
+        return false;
+      }
       this._spend(up.cost);
       this._upgrades.inProgress.set(up.id, building);
       state.started = true;
@@ -599,7 +638,10 @@ export class MapScene extends Phaser.Scene {
       state.duration = up.researchTime * 1000; // read by the building progress bar
     }
     state.elapsed += dt;
-    if (state.elapsed < state.duration) return false; // researching…
+    if (state.elapsed < state.duration) {
+      state.reason = `researching ${up.label}`;
+      return false;                                 // researching…
+    }
     this._completeResearch(up);
     return true;
   }
@@ -760,7 +802,7 @@ export class MapScene extends Phaser.Scene {
   // _claimDeposit (docs/adr/0017). Reach-limited like Gather — only Sites within CLAIM_RADIUS of
   // where the Worker stands. Returns an opaque handle + a Tile to stand on beside the Footprint,
   // or null when no Site in reach needs builders (so the Worker waits in place).
-  _claimBuildSlot(unit) {
+  _claimBuildSlot(unit, state) {
     const { x: ux, y: uy } = this._unitTile(unit);
     // Already holding a slot on a live Site? Keep it (refresh the standing Tile).
     if (unit._buildSlot && this._sites.includes(unit._buildSlot)) {
@@ -768,20 +810,31 @@ export class MapScene extends Phaser.Scene {
       return { handle: site, dest: this._standingTileBesideFootprint(site, ux, uy) || { x: ux, y: uy } };
     }
     let best = null, bestStand = null, bestD = Infinity;
+    let anyOwn = false, inReach = false, sawFull = false;           // why no slot, for the reason
     for (const site of this._sites) {
       if (site.faction !== unit.faction) continue;                  // build only your own
-      if (site.builders.size >= 4 && !site.builders.has(unit)) continue; // full — four builders max
+      anyOwn = true;
       // Chebyshev distance from the Worker to the Footprint rectangle, in Tiles (rally reach).
       const dx = Math.max(site.tx - ux, ux - (site.tx + site.tileW - 1), 0);
       const dy = Math.max(site.ty - uy, uy - (site.ty + site.tileH - 1), 0);
       if (Math.max(dx, dy) > CLAIM_RADIUS) continue;                // out of reach — ignore
+      inReach = true;
+      if (site.builders.size >= 4 && !site.builders.has(unit)) { sawFull = true; continue; } // full
       const d = dx * dx + dy * dy;
       if (d >= bestD) continue;
       const stand = this._standingTileBesideFootprint(site, ux, uy);
       if (!stand) continue;                                         // hemmed in — unreachable
       best = site; bestStand = stand; bestD = d;
     }
-    if (!best) return null;                                         // none in reach — wait in place
+    if (!best) {                                                    // none in reach — wait in place
+      if (state) {
+        state.reason = !anyOwn  ? 'no Construction Site has been placed yet'
+                     : !inReach ? 'no Construction Site within reach of where this Worker was sent'
+                     : sawFull  ? 'every Construction Site in reach already has four builders'
+                     : 'the Construction Site in reach is hemmed in';
+      }
+      return null;
+    }
     this._releaseBuildSlot(unit);                                   // drop any prior slot
     best.builders.add(unit);
     unit._buildSlot = best;
@@ -806,10 +859,13 @@ export class MapScene extends Phaser.Scene {
   // frame, so N builders accrue N×dt — the linear "more Workers ⇒ faster" rule, capped at 4 by the
   // slot limit. Returns true (advance the Worker + free its slot) when the Site completes or has
   // already gone (finished or razed under it).
-  _construct(unit, site, dt) {
+  _construct(unit, site, dt, state) {
     if (!this._sites.includes(site)) { this._releaseBuildSlot(unit); return true; }
     site.buildProgress += dt;
-    if (site.buildProgress < site.buildDuration) return false;     // still building
+    if (site.buildProgress < site.buildDuration) {
+      if (state) state.reason = `raising the ${getBuildingType(site.type)?.label || site.type}`;
+      return false;                                                // still building
+    }
     this._completeSite(site);
     return true;
   }
@@ -1544,22 +1600,34 @@ void main(void){
   // was rallied, and return an opaque handle + a free Tile to stand on beside it + its gather time
   // (docs/adr/0017). At most one Worker holds a Deposit at a time, so several Workers on one shared
   // Flow spread across the cluster instead of crowding one. null ⇒ nothing free in reach: the
-  // Gather executor then holds the cursor and the Worker waits in place until a Claim frees.
-  _claimDeposit(unit) {
+  // Gather executor then holds the cursor and the Worker waits in place until a Claim frees. In
+  // that case `state` (the Gather node's scratch) is given the reason the Worker is waiting
+  // (docs/adr/0023) — the rally-reach filter runs first so "in reach" is meaningful to report.
+  _claimDeposit(unit, state) {
     const { x: ux, y: uy } = this._unitTile(unit);
     let best = null, bestStand = null, bestD = Infinity;
+    let inReach = false, sawClaimed = false, sawNoRoom = false; // which filter rejected candidates
     for (const dep of this._deposits) {
-      if (dep.claimedBy && dep.claimedBy !== unit) continue;      // held by another Worker
-      if (this._cargoRoom(unit, dep.type) <= 0) continue;         // can't carry any more of this
       const ddx = dep.tx - ux, ddy = dep.ty - uy;
       if (Math.max(Math.abs(ddx), Math.abs(ddy)) > CLAIM_RADIUS) continue; // out of rally reach
+      inReach = true;
+      if (dep.claimedBy && dep.claimedBy !== unit) { sawClaimed = true; continue; } // another Worker
+      if (this._cargoRoom(unit, dep.type) <= 0) { sawNoRoom = true; continue; } // Cargo has no room
       const d = ddx * ddx + ddy * ddy;
       if (d >= bestD) continue;
       const stand = this._standingTileBeside(dep, ux, uy);
       if (!stand) continue;                                       // hemmed in — ungatherable
       best = dep; bestStand = stand; bestD = d;
     }
-    if (!best) return null;
+    if (!best) {
+      if (state) {
+        state.reason = !inReach  ? 'no Deposit within reach of where this Worker was sent'
+                     : sawNoRoom ? 'Cargo has no room for the Deposits in reach'
+                     : sawClaimed ? 'every Deposit in reach is claimed by another Worker'
+                     : 'the Deposits in reach are hemmed in';
+      }
+      return null;
+    }
     this._releaseClaim(unit);     // drop any prior hold before taking a new one
     best.claimedBy = unit;
     unit._claim = best;
@@ -1987,6 +2055,13 @@ void main(void){
   _setRunning(running) {
     if (this._over) return; // level decided — START/PAUSE is inert
     this._running = running;
+    // The full Wave list is a pre-match briefing: once the clock is actually running the compact
+    // next-Wave readout is what matters, so fold it away on the FIRST start only — re-opening it
+    // mid-match is then the player's choice and is never undone behind their back.
+    if (running && !this._waveAutoCollapsed) {
+      this._waveAutoCollapsed = true;
+      this._setWaveListOpen(false);
+    }
     if (running) for (const r of this._runners()) if (!r.run) this._startRun(r);
     else this._stopInspecting(); // pausing returns to the authoring/assign gesture
     this._updateStartBtn();
@@ -2118,8 +2193,10 @@ void main(void){
     editor.setActiveNode(r.run?.current ?? null, r.run?.status ?? 'idle', this._runDetail(r));
   }
 
-  // A human-readable status line for the inspected Runner's Run: the active node's title plus its
-  // elapsed/duration for timed nodes (Wait/Gather/Hold/Train all accumulate `elapsed` in scratch).
+  // A human-readable status line for the inspected Runner's Run: the active node's title, WHY its
+  // cursor is parked there (docs/adr/0023), and its elapsed/duration for timed nodes (Wait/Gather/
+  // Hold/Train all accumulate `elapsed` in scratch). The reason is the half that distinguishes a
+  // Worker that is working from one that is stuck — both sit on Gather looking identical.
   _runDetail(r) {
     const run = r.run;
     if (!run) return 'idle — paused or no Flow assigned';
@@ -2132,14 +2209,15 @@ void main(void){
     if (!node) return run.status;
     let title;
     try { title = getNodeKind(node.kind).title; } catch { title = node.kind; }
+    const why = run.reason ? ` — ${run.reason}` : '';
     const ms = run.state?.elapsed;
     if (ms != null) {
       // Prefer the live scratch duration (Gather/Deliver), else the node's duration Param (Wait/Hold).
       const total = run.state?.duration != null ? run.state.duration / 1000 : node.params?.duration;
-      return total ? `▶ ${title}  ${(ms / 1000).toFixed(1)} / ${total.toFixed(1)}s`
-                   : `▶ ${title}  ${(ms / 1000).toFixed(1)}s`;
+      return total ? `▶ ${title}${why}  ${(ms / 1000).toFixed(1)} / ${total.toFixed(1)}s`
+                   : `▶ ${title}${why}  ${(ms / 1000).toFixed(1)}s`;
     }
-    return `▶ ${title}`;
+    return `▶ ${title}${why}`;
   }
 
   // Top-left panel showing the player's Stockpile — one entry per known Resource.
@@ -2173,6 +2251,107 @@ void main(void){
     const done = [...this._upgrades.done].map((id) => getUpgrade(id)?.label).filter(Boolean);
     this._upgradesPanel.classList.toggle('hidden', done.length === 0);
     this._upgradesPanel.textContent = done.length ? `✦ ${done.join('   ✦ ')}` : '';
+  }
+
+  // ── Scenario briefing + Wave readout (docs/adr/0014) ────────────────────────
+
+  // A Scenario's Waves are the fixed challenge the player authors Flows *against*, before the clock
+  // starts (CONTEXT.md Scenario / Wave). That only works if the timeline is legible from the game
+  // rather than from src/scenario.js, so this panel is both halves of it: expanded while the match
+  // is paused it is the pre-match briefing — every Wave, its time, its size and the edge it arrives
+  // from; collapsed it is a live readout of the next Wave and its countdown. Like the Objective it
+  // only READS the Scenario and the wave clock (docs/adr/0014) and changes nothing.
+  _buildWavePanel() {
+    const panel = document.createElement('div');
+    panel.className = 'wave-panel';
+
+    const head = document.createElement('div');
+    head.className = 'wave-head';
+    const title = document.createElement('span');
+    title.className = 'wave-title';
+    const eta = document.createElement('span');
+    eta.className = 'wave-eta';
+    const toggle = document.createElement('button');
+    toggle.className = 'wave-toggle';
+    toggle.addEventListener('click', () => this._setWaveListOpen(!this._waveOpen));
+    head.append(title, eta, toggle);
+
+    const next = document.createElement('div');
+    next.className = 'wave-next';
+    const list = document.createElement('ol');
+    list.className = 'wave-list';
+    panel.append(head, next, list);
+
+    // The same pointer swallow the sim toolbar needs: this panel is a DOM overlay above the canvas
+    // and Phaser also listens on `window`, so an unswallowed click here would fall through and
+    // hit-test whatever Runner happens to sit behind the panel.
+    for (const ev of ['pointerdown', 'pointerup', 'mousedown', 'mouseup']) {
+      panel.addEventListener(ev, (e) => e.stopPropagation());
+    }
+    document.body.appendChild(panel);
+
+    this._wavePanel = panel;
+    this._waveEls = { title, eta, next, list, toggle };
+    this._waveListNext = -1;      // ≠ _scenarioState.next, so the first update builds the list
+    this._waveAutoCollapsed = false;
+    this._setWaveListOpen(true);  // the briefing opens expanded; the first START folds it
+    this._updateWavePanel();
+  }
+
+  _setWaveListOpen(open) {
+    if (!this._wavePanel) return;
+    this._waveOpen = open;
+    this._wavePanel.classList.toggle('open', open);
+    this._waveEls.toggle.textContent = open ? '▾' : '▸';
+    this._waveEls.toggle.title = open ? 'Hide the Wave timeline' : 'Show the Wave timeline';
+  }
+
+  // Cheap to call every frame: the head/next lines are compared before being written, and the
+  // timeline rows are rebuilt only when the wave clock's cursor actually moves on.
+  _updateWavePanel() {
+    if (!this._wavePanel) return;
+    const st = this._scenarioState;
+    const total = SCENARIO.waves.length;
+    const allOut = st.next >= total;
+    const w = allOut ? null : SCENARIO.waves[st.next];
+
+    setText(this._waveEls.title, allOut ? `${SCENARIO.name} — all Waves out`
+                                        : `${SCENARIO.name} — Wave ${st.next + 1} / ${total}`);
+    setText(this._waveEls.eta, allOut ? 'clear the field' : `in ${clock(Math.max(0, w.at - st.time))}`);
+    setText(this._waveEls.next, allOut
+      ? 'No further Waves — destroy what is left to win'
+      : `${w.count} × ${getUnitType(w.unitType)?.label || w.unitType}  ·  from the ${COMPASS[w.spawn] || w.spawn}`);
+
+    if (this._waveListNext !== st.next) {
+      this._waveListNext = st.next;
+      this._renderWaveList();
+    }
+  }
+
+  // The briefing proper: one row per Wave, spent ones dimmed and the next one picked out. Rebuilt
+  // wholesale (a Scenario is a couple of dozen rows) rather than reconciled — it changes once a Wave.
+  _renderWaveList() {
+    const list = this._waveEls.list;
+    list.textContent = '';
+    let nextRow = null;
+    SCENARIO.waves.forEach((wave, i) => {
+      const row = document.createElement('li');
+      if (i < this._waveListNext) row.className = 'spent';
+      else if (i === this._waveListNext) { row.className = 'next'; nextRow = row; }
+      const at = document.createElement('span');
+      at.className = 'wave-at';
+      at.textContent = clock(wave.at);
+      const what = document.createElement('span');
+      what.className = 'wave-count';
+      what.textContent = `${wave.count} × ${getUnitType(wave.unitType)?.label || wave.unitType}`;
+      const dir = document.createElement('span');
+      dir.className = 'wave-dir';
+      dir.textContent = COMPASS[wave.spawn] || wave.spawn;
+      row.append(at, what, dir);
+      list.appendChild(row);
+    });
+    // Keep the next Wave in view as the Scenario walks down a timeline taller than the panel.
+    if (this._waveOpen && nextRow) nextRow.scrollIntoView({ block: 'nearest' });
   }
 
   // Centre banner for the Objective outcome (docs/adr/0014) — hidden until win/lose.

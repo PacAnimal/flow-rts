@@ -45,3 +45,26 @@ neither is a per-Runner behaviour. It follows the same "world owns evaluation" s
 - CONTEXT.md gains **Scenario**, **Wave**, and **Objective**.
 - Deferred: branching/scripted objectives, mid-level events, multiple/simultaneous objectives,
   reinforcement triggers tied to player state, and an authoring tool for Scenarios.
+
+## Amendment: the Wave timeline is shown to the player
+
+The original decision made Waves level *data* and said nothing about whether the player may read it.
+In practice they could not: the timeline lived only in `src/scenario.js`. That quietly broke the
+premise this whole game rests on — "every decision your side makes was authored before the clock
+started" — because a challenge you cannot see is not one you can author against. `OnWaveIncoming`
+gives a Flow a lead-time Interrupt, but it tells the *author* nothing about what is coming, how many,
+or from where, so the only way to plan wave 11 was to read the source or lose to it once.
+
+The Scenario's Wave timeline is therefore **public**: a HUD panel renders it straight from
+`SCENARIO.waves`. Expanded it is a pre-match briefing — every Wave with its time, size, Enemy type
+and the map edge it arrives from; collapsed it is a live next-Wave readout and countdown. It folds
+itself the first time START is pressed, since the briefing has served its purpose by then.
+
+This changes no seam. The panel only *reads* the Scenario and the wave clock and changes nothing,
+exactly as the Objective does — the Scenario still declares the challenge as data and the world
+still plays it. It is a decision about what the game *tells* the player, recorded here because
+hiding the timeline was a (tacit) design choice and this reverses it.
+
+Deferred: telegraphing a Wave's composition on the map itself (an arrow at the spawn edge), and
+per-Wave Enemy Flows, which would make the briefing's "what is coming" meaningfully richer than a
+count and a type.

@@ -103,6 +103,66 @@
 
 .upgrades-panel.hidden { display: none; }
 
+/* Scenario briefing + Wave readout (docs/adr/0014): the threat timeline the player authors Flows
+   against. Third card in the left HUD column, under materials/upgrades. Expanded (.open) it is the
+   pre-match briefing; collapsed it is the next-Wave line alone. Warm red to read as the threat,
+   against the materials panel's blue and the Upgrades panel's gold. */
+.wave-panel {
+  position: fixed;
+  top: 88px;
+  left: 12px;
+  z-index: 1100;
+  width: 236px;
+  padding: 8px 12px 10px;
+  font: 600 12px/1.45 system-ui, sans-serif;
+  color: #ffc9c9;
+  background: rgba(20, 26, 31, 0.82);
+  border: 1px solid #6e4545;
+  border-radius: 6px;
+}
+.wave-head { display: flex; align-items: baseline; gap: 6px; }
+.wave-title { font-weight: 800; letter-spacing: 0.03em; color: #ffdede; }
+.wave-eta {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums; /* the countdown must not jitter as digits change */
+  color: #ff9f9f;
+}
+.wave-toggle {
+  padding: 0;
+  font: 700 11px/1 system-ui, sans-serif;
+  color: #ffc9c9;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.wave-toggle:hover { color: #fff; }
+.wave-next { margin-top: 3px; color: #e8d2d2; }
+
+/* The timeline itself — hidden unless the panel is expanded. Capped and scrollable so a long
+   Scenario can't push the card off the screen. */
+.wave-list {
+  display: none;
+  max-height: 38vh;
+  margin: 8px 0 0;
+  padding: 7px 0 0;
+  overflow-y: auto;
+  list-style: none;
+  border-top: 1px solid #533636;
+}
+.wave-panel.open .wave-list { display: block; }
+.wave-list li {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+  font-weight: 500;
+  color: #d8bcbc;
+}
+.wave-list li.spent { opacity: 0.38; }        /* already arrived */
+.wave-list li.next  { color: #fff0f0; font-weight: 800; }
+.wave-at    { width: 38px; font-variant-numeric: tabular-nums; }
+.wave-count { flex: 1; }
+.wave-dir   { opacity: 0.75; }
+
 /* Objective banner (docs/adr/0014): centred win/lose card over the map. */
 .level-banner {
   position: fixed;

@@ -38,7 +38,7 @@ is shaped the way it is. Consult them before non-trivial changes:
   precise meaning and a list of words to *avoid*. Use the exact vocabulary (Flow, Runner, Run,
   Node, Exec/Data port, Parameter, Deposit, Cargo, Stockpile, Scenario, Wave, Objective, …). Do not
   call a Flow a "graph" or a Deposit a "resource node". This matters for both code and comments.
-- **`docs/adr/`** — 22 Architecture Decision Records (numbered `0001`–`0022`). Code comments cite
+- **`docs/adr/`** — 23 Architecture Decision Records (numbered `0001`–`0023`). Code comments cite
   them constantly (e.g. `docs/adr/0006`). When you touch a subsystem, the relevant ADR explains the
   constraint you must preserve. Adding a significant architectural decision means writing a new ADR.
 
@@ -64,8 +64,10 @@ This keeps `runtime.js`, `movement.js`, `combat.js`, `pathfinding.js`, `units.js
   node kind = a descriptor here + an executor in `runtime.js`. Keep descriptors data-only.
 - **`src/flow/runtime.js`** — the interpreter. `startRun` / `tickRun` advance a per-Runner **Run**
   `{ flowId, current, status, state }`. The cursor reads the *live* model each tick (edits take
-  effect mid-run; deleting the current node halts the Run — ADR-0005). Executors return `RUNNING`
-  (park the cursor) or `done(outPort)` (follow that Exec connection). Instant nodes chain within one
+  effect mid-run; deleting the current node halts the Run — ADR-0005). Executors return
+  `running(reason)` (park the cursor, and say why — ADR-0023) or `done(outPort)` (follow that Exec
+  connection). A reason only the world knows is written into the node's scratch `state` by the world
+  primitive and read back out by the executor — no new `world` call. Instant nodes chain within one
   tick, guarded by `maxSteps`. A loop is a back-edge connection, not a node kind (CONTEXT.md).
 - **`src/flow/editor.js`** + `editor.css` — the editor is a hand-built **DOM overlay** (with an SVG
   layer for connections) above the Phaser canvas, *not* a Phaser scene (ADR-0001). Toggle with the
