@@ -33,6 +33,14 @@ const MAP_H = 90;
 
 // A Wave's spawn-point key (src/scenario.js) as the compass word a player would use for that map
 // edge — 'top' is the north edge of the map, and "from the north" is how the briefing reads.
+// Largest delta one fast-forward substep may advance the sim by. The substep loop feeds each step
+// the real frame delta, so on a heavy frame — which high speeds make likely, since they multiply
+// the sim work behind a single render — the steps grow too. Past ~32ms a fast Unit (the Reaper, at
+// 6 Tiles/s) covers more than WP_REACH in one step and can skip waypoints: exactly the instability
+// substepping exists to avoid (docs/adr/0007). Clamping means a struggling frame advances the sim
+// slower than real time rather than advancing it wrongly.
+const MAX_SUBSTEP_MS = 32;
+
 const COMPASS = { left: 'west', right: 'east', top: 'north', bottom: 'south' };
 // A quarter-turn around the base: the edge a Flank Wave stages toward before attacking in, so it
 // skirts the base rather than running straight through it (src/scenario.js ENEMY_FLOWS.flank).
@@ -350,16 +358,17 @@ export class MapScene extends Phaser.Scene {
       // the real frame delta. Substepping rather than scaling delta keeps movement steering and
       // Tile-occupancy stable at speed — a 4× delta would let fast Units overshoot waypoints and
       // tunnel through footprints. Sprite/DOM sync below still runs once per rendered frame.
+      const stepMs = Math.min(delta, MAX_SUBSTEP_MS);
       for (let step = 0; step < this._speed && !this._over; step++) {
         // Tick every Runner's Run — Units and Buildings alike (CONTEXT.md Runner). Buildings run
         // building-scoped Flows (Train); Units run movement/gather/combat Flows.
-        for (const runner of this._runners()) this._tickRunner(runner, delta);
+        for (const runner of this._runners()) this._tickRunner(runner, stepMs);
 
         // Combat resolves before movement so an engaging Unit holds its ground (docs/adr/0012),
         // then the movement pass integrates positions, then the Scenario advances its wave clock.
-        this._combat.update(this.units, delta);
-        this._movement.update(this.units, delta);
-        this._updateScenario(delta);
+        this._combat.update(this.units, stepMs);
+        this._movement.update(this.units, stepMs);
+        this._updateScenario(stepMs);
 
         this._checkObjective();
       }
@@ -2130,7 +2139,7 @@ void main(void){
     // Speed control: one toggle per multiplier. The selected one drives update()'s substep count.
     const speeds = document.createElement('div');
     speeds.className = 'sim-speeds';
-    this._speedBtns = [1, 2, 3, 4].map((mult) => {
+    this._speedBtns = [1, 2, 3, 4, 8, 16].map((mult) => {
       const b = document.createElement('button');
       b.className = 'sim-speed';
       b.textContent = `×${mult}`;

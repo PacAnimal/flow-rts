@@ -24,6 +24,10 @@ export class FlowLibrary {
   constructor() {
     /** @type {Array<{id:string, name:string, model:FlowModel, category?:string}>} */
     this.entries = [];
+    // Which version of the starter Flows this Library was seeded with (src/flow/templates.js), or
+    // null for never. Stored with the Library rather than inferred from it being empty: a player
+    // who deletes every starter has made a decision, and re-seeding would undo it on reload.
+    this.seeded = null;
   }
 
   create(name, targetKind = 'unit', buildingType = null) {
@@ -92,6 +96,7 @@ export class FlowLibrary {
 
   toJSON() {
     return {
+      ...(this.seeded ? { seeded: this.seeded } : {}),
       entries: this.entries.map((e) => ({
         id: e.id, name: e.name, model: e.model.toJSON(),
         ...(e.protected ? { protected: true } : {}),
@@ -112,6 +117,9 @@ export class FlowLibrary {
     if (!raw) return;
     try {
       const data = JSON.parse(raw);
+      // A Library saved before the starters existed has no `seeded` stamp, so it reads back as
+      // null and gets them on this load — the intended upgrade path.
+      this.seeded = data?.seeded ?? null;
       // No version bump for Categories (CONTEXT.md): a legacy v1 entry simply lacks `category`
       // and reads back as Uncategorized.
       this.entries = (data?.entries ?? []).map((e) => ({

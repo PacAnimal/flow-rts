@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { MapScene } from './scenes/MapScene.js';
 import { FlowEditor } from './flow/editor.js';
 import { flowLibrary } from './flow/library.js';
+import { seedStarterFlows } from './flow/templates.js';
 
 const game = new Phaser.Game({
   type: Phaser.AUTO,
@@ -16,6 +17,11 @@ const game = new Phaser.Game({
     roundPixels: true,
   },
 });
+
+// Seed the starter Flows on a Library that has never had them (src/flow/templates.js), before the
+// editor mounts so its first render opens onto a working Flow rather than a blank Canvas.
+const seeded = seedStarterFlows(flowLibrary);
+if (seeded) console.log(`Seeded ${seeded} starter Flows into the Library`);
 
 // Flow editor — a DOM overlay above the Phaser canvas. Toggle with the button or `F`.
 const editor = new FlowEditor(flowLibrary).mount();

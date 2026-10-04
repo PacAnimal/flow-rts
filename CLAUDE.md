@@ -79,6 +79,11 @@ This keeps `runtime.js`, `movement.js`, `combat.js`, `pathfinding.js`, `units.js
   Flow; editing it changes all of them. Each runner keeps its own Run state.
 - **`src/flow/assign.js`** / `positionPicker.js` — assigning a Flow to a Runner; picking a map Tile
   for a `tile` parameter (e.g. Move's destination).
+- **`src/flow/templates.js`** — `STARTER_FLOWS`, the worked-example Flows seeded into the Library on
+  a first run (`seedStarterFlows`, called from `main.js`). Ordinary editable entries filed under a
+  *Starters* Category, not Protected. Seeding is keyed on a version stamp stored with the Library
+  (`library.seeded`), never on the Library being empty — deleting a starter is a decision. Pure:
+  it builds FlowModels and nothing else.
 
 ### The world (Phaser side)
 

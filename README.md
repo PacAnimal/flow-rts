@@ -44,6 +44,15 @@ tilemap, Buildings, Units and Decorations. Handy when iterating on the GLSL.
 3. **Pick or create a Flow** in the Library panel. A Flow targets one Runner kind (Unit or
    Building); a Building-Flow further targets one building type, which fixes the Units its Train
    node offers. Flows can be filed under a freeform Category to keep the Library tidy.
+
+   On a first run the Library is seeded with five **starter Flows** under a *Starters* Category —
+   Gather Loop, Stand Guard, Rally and Hold, Train Workers to 6, Train Marines to 8. They are
+   ordinary Flows (edit them, clone them, delete them) and between them they demonstrate the three
+   idioms nothing else announces: a loop is a Connection wired *backward* and must contain a node
+   that waits; an Interrupt reacts without the main line polling; a Branch caps a production loop.
+   Assign Gather Loop to your Workers and Train Workers to 6 to the Command Center and you have a
+   working economy without authoring anything. Only Rally and Hold needs filling in — its Move
+   destination, flagged with a ⚠ on the node.
 4. **Author it.** Drag node kinds from the palette onto the Canvas, wire Exec output → Exec input,
    and fill in each node's Parameters (a Move destination is picked by clicking a Tile on the map).
    There is no loop node: a loop is a Connection wired *backward* to an earlier node, gated by a
@@ -51,7 +60,9 @@ tilemap, Buildings, Units and Decorations. Handy when iterating on the GLSL.
 5. **Assign it.** Close the editor and click a Runner. The assign overlay lists only the Flows that
    match that Runner — Unit-Flows for Units, this-building-type Flows for Buildings. Assigning
    replaces any previous Assignment and starts a fresh Run.
-6. **Press ▶ Start.** The toolbar also carries Pause, ↻ Restart, and a ×1–×4 speed control. While
+6. **Press ▶ Start.** The toolbar also carries Pause, ↻ Restart, and a ×1–×16 speed control (the
+   sim is advanced by running that many substeps per rendered frame, not by scaling time, so
+   steering and Tile occupancy stay stable at speed). While
    the simulation runs, clicking any Runner docks the editor beside the map as a read-only
    inspector with that Runner's current node highlighted, plus a status line saying what that node
    is doing *and why it is waiting* — "every Deposit in reach is claimed by another Worker",
