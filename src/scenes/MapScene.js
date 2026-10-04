@@ -15,7 +15,7 @@ import { ConstructionSite } from '../entities/ConstructionSite.js';
 import { TILE, EXTRUDE, UNIT_CARRY_CAPACITY } from '../constants.js';
 import { flowLibrary } from '../flow/library.js';
 import { openAssignOverlay } from '../flow/assign.js';
-import { registerPositionPicker } from '../flow/positionPicker.js';
+import { registerPositionPicker, pickPosition } from '../flow/positionPicker.js';
 import { startRun, tickRun } from '../flow/runtime.js';
 import { getNodeKind } from '../flow/nodeKinds.js';
 import { MovementSystem } from '../movement.js';
@@ -192,6 +192,10 @@ export class MapScene extends Phaser.Scene {
     // Construction Sites (docs/adr/0018): placed-but-unfinished Buildings raised by Worker crews.
     // Their own entities (not Buildings, not Runners), but they occupy footprints and take damage.
     this._sites = [];
+    // Markers (docs/adr/0024): the player's named Tiles, and the third kind of Runner. Built from
+    // the Library's saved records in _spawnMarkers; a Marker's Run and any Flow-driven move are
+    // world state, reset with the level like every other Run.
+    this._markers = [];
     this._enemyFlows = new Map(); // flowId → FlowModel for spawned Enemies
     this._over = false;           // set once the Objective resolves (win/lose)
     this._enemySeq = 0;
@@ -211,6 +215,7 @@ export class MapScene extends Phaser.Scene {
     if (!groundOnly) this._placeDecorations(); // trees — scattered, no overlap (docs/adr/0009)
     this._critterFlowId = this._ensureCritterFlow();
     if (!groundOnly) this._spawnUnits();
+    if (!groundOnly) this._spawnMarkers();
     this._setupCamera();
     this.input.mouse?.disableContextMenu(); // allow right-click as a cancel gesture
     registerPositionPicker((opts) => this._beginPositionPick(opts));
@@ -310,6 +315,14 @@ export class MapScene extends Phaser.Scene {
       // any movement goal so the Runner stops in place and clear any combat stance, so the handler
       // starts clean. Resuming re-asserts intent — Move/Hold/AttackMove re-issue it every tick — so
       // this only needs to stop, not remember. A Building has neither, hence the feature guards.
+      // Markers (docs/adr/0024): Move / Attack-Move resolve a Marker's name to its live Tile every
+      // tick (null ⇒ no such Marker — the executor parks and says so); a Marker-Flow's own Move
+      // relocates it. Player-wide for now — Enemy Flows carry literal Tiles and never ask.
+      markerTile: (name) => {
+        const m = this._markers.find((mk) => mk.name === name);
+        return m ? { x: m.tx, y: m.ty } : null;
+      },
+      relocateMarker: (marker, dest) => this._relocateMarker(marker, dest),
       suspendRunner: (runner) => {
         if (runner.mv) this._movement.stop(runner);
         if (runner.combat) runner.combat = null;
@@ -329,6 +342,7 @@ export class MapScene extends Phaser.Scene {
     this._buildMaterialsPanel();
     this._buildUpgradesPanel();
     this._buildWavePanel();
+    this._buildMarkerPanel();
     this._buildBanner();
     this._showTitleCard();
 
@@ -338,7 +352,7 @@ export class MapScene extends Phaser.Scene {
       clearTimeout(this._titleCardT1);
       clearTimeout(this._titleCardT2);
       this._titleCard?.remove();
-      for (const el of [this._uiOverlay, this._toolbar, this._materialsPanel, this._upgradesPanel, this._wavePanel, this._banner, this._statsEl]) {
+      for (const el of [this._uiOverlay, this._toolbar, this._materialsPanel, this._upgradesPanel, this._wavePanel, this._markerPanel, this._banner, this._statsEl]) {
         el?.remove();
       }
       if (this._onOverlayVisibility) {
@@ -404,6 +418,8 @@ export class MapScene extends Phaser.Scene {
       }
     }
 
+    for (const m of this._markers) this._placeMarkerLabel(m, cam, camOX, camOY);
+
     // Construction Sites track the camera the same way (docs/adr/0018): a Phaser progress bar in
     // world space (kept screen-constant via 1/zoom) plus a DOM health bar positioned by transform.
     for (const s of this._sites) {
@@ -427,8 +443,9 @@ export class MapScene extends Phaser.Scene {
     this._syncInspector();
   }
 
-  // Every Runner currently on the map (Units + Buildings). Enemy Units are in `this.units`.
-  _runners() { return [...this.units, ...this.buildings]; }
+  // Every Runner currently on the map (Units + Buildings + Markers, docs/adr/0024). Enemy Units are
+  // in `this.units`.
+  _runners() { return [...this.units, ...this.buildings, ...this._markers]; }
 
   // Advance one Runner's Run against its live Flow model. Player Flows resolve from the Library;
   // Enemy Flows are data-authored and resolve from the Scenario's registry (docs/adr/0011, 0014).
@@ -2093,8 +2110,13 @@ void main(void){
   _nodeDesc(node) {
     const p = node.params;
     if (node.kind === 'Move' || node.kind === 'AttackMove') {
+      if (p?.marker) return `${node.kind} → "${p.marker}"`;
       const d = p?.destination;
       return d ? `${node.kind} → (${d.x}, ${d.y})` : node.kind;
+    }
+    if (node.kind === 'MoveMarker') {
+      const d = p?.destination;
+      return d ? `Move Marker → (${d.x}, ${d.y})` : 'Move Marker';
     }
     if (node.kind === 'Wait') return p?.duration ? `Wait ${p.duration}s` : 'Wait';
     if (node.kind === 'Hold') return p?.duration ? `Hold ${p.duration}s` : 'Hold';
@@ -2225,6 +2247,7 @@ void main(void){
   }
 
   _inspectTitle(runner) {
+    if (runner.isMarker) return `Marker “${runner.name}”`;
     return `${runner.label || 'Runner'}  ·  ${runner.faction}`;
   }
 
@@ -2567,6 +2590,224 @@ void main(void){
     g.setDepth(2e6).setVisible(true);
   }
 
+  // ── Markers (docs/adr/0024) ─────────────────────────────────────────────────
+  //
+  // A Marker is a named Tile that player Move / Attack-Move nodes head for, and the third kind of
+  // Runner: it can be assigned a Marker-Flow, whose Move relocates it instantly. It has a Faction
+  // (Player — so its Flow's Signals are the player's) but no Health: it is not in `units` or
+  // `buildings`, so nothing targets it, nothing paths around it, and it occupies no Tile.
+
+  // Build the live Markers from the Library's saved records. Runs once per create(), so Restart puts
+  // every Marker back where the player last left it by hand, undoing any Flow-driven move.
+  _spawnMarkers() {
+    this._ensureMarkerTexture();
+    for (const rec of flowLibrary.markers) this._createMarker(rec);
+  }
+
+  // A drop-pin texture, drawn once and shared: a disc on a stalk whose tip marks the Tile centre.
+  _ensureMarkerTexture() {
+    if (this.textures.exists('marker-pin')) return;
+    const g = this.make.graphics({ x: 0, y: 0 }, false);
+    g.fillStyle(0x000000, 0.35).fillEllipse(16, 45, 14, 5);
+    g.fillStyle(0xb77cff, 1).fillTriangle(9, 18, 23, 18, 16, 45);
+    g.fillStyle(0xb77cff, 1).fillCircle(16, 14, 12);
+    g.lineStyle(2, 0xf3e6ff, 1).strokeCircle(16, 14, 12);
+    g.fillStyle(0xf3e6ff, 1).fillCircle(16, 14, 4.5);
+    g.generateTexture('marker-pin', 32, 48);
+    g.destroy();
+  }
+
+  _createMarker(rec) {
+    // Only a Marker-Flow may be restored onto a Marker (docs/adr/0015): a stale or retyped id clears.
+    const saved = rec.flowId ? flowLibrary.get(rec.flowId) : null;
+    const m = {
+      isMarker: true,
+      name: rec.name,
+      label: rec.name,
+      faction: FACTION.PLAYER,
+      tx: rec.x, ty: rec.y, x: 0, y: 0,
+      assignedFlowId: saved && saved.model.targetKind === 'marker' ? saved.id : null,
+      run: null,
+    };
+    m.sprite = this.add.image(0, 0, 'marker-pin').setOrigin(0.5, 0.95);
+    m.sprite.setInteractive({ useHandCursor: true });
+    m.sprite.setData('marker', m);
+    m._ui = this._createRunnerUI(0);
+    this._uiOverlay.appendChild(m._ui.el);
+    this._markers.push(m);
+    this._setMarkerTile(m, rec.x, rec.y);
+    this._refreshMarkerLabel(m);
+    this._startRun(m);
+    return m;
+  }
+
+  // Put a Marker on a Tile and move its pin. Logical position only — whether that is saved is the
+  // caller's business (a hand drag is; a Marker-Flow's Move is not).
+  _setMarkerTile(m, tx, ty) {
+    m.tx = tx; m.ty = ty;
+    // Feet position, as for a Unit, so Tile-based Conditions read the Marker's own Tile.
+    m.x = tx * TILE + TILE * 0.5;
+    m.y = ty * TILE + TILE;
+    m.sprite.setPosition(m.x, ty * TILE + TILE * 0.5);
+    // Above trees and Units so a destination is never hidden behind what it is directing.
+    m.sprite.setDepth(1.5e6);
+  }
+
+  // A Marker-Flow's Move (docs/adr/0024). A pick that is no longer Walkable is snapped to the
+  // nearest Walkable Tile, so a Marker can never send Units after a goal on a cliff or a Deposit.
+  // Not saved: a Flow's moves reset with the level.
+  _relocateMarker(m, dest) {
+    if (!m?.isMarker || !dest) return;
+    const t = this.walkable(dest.x, dest.y) ? dest : this._freeWalkableNear(dest.x, dest.y);
+    if (t) this._setMarkerTile(m, t.x, t.y);
+  }
+
+  _saveMarkerPosition(m) {
+    const rec = flowLibrary.getMarker(m.name);
+    if (!rec) return;
+    rec.x = m.tx; rec.y = m.ty;
+    flowLibrary.save();
+  }
+
+  _refreshMarkerLabel(m) {
+    if (!m._ui) return;
+    const entry = m.assignedFlowId ? flowLibrary.get(m.assignedFlowId) : null;
+    m._ui.nameEl.textContent = m.name;
+    m._ui.nameEl.style.color = '#e6c4ff';
+    m._ui.flowEl.textContent = entry ? entry.name : '';
+    m._ui.flowEl.style.display = entry ? '' : 'none';
+  }
+
+  _placeMarkerLabel(m, cam, camOX, camOY) {
+    if (!m._ui) return;
+    const topY = m.sprite.y - m.sprite.displayHeight * 0.95 - 2;
+    m._ui.el.style.left = ((m.x - cam.scrollX) * cam.zoom + camOX) + 'px';
+    m._ui.el.style.top = ((topY - cam.scrollY) * cam.zoom + camOY) + 'px';
+  }
+
+  // Place a new Marker: name it, then pick its Tile with the shared position picker. Units already
+  // parked on `Move → "<name>"` set off the moment it lands. False for a blank or taken name.
+  _placeNewMarker(name) {
+    const n = (name || '').trim();
+    if (!n || flowLibrary.getMarker(n)) return false;
+    pickPosition({
+      prompt: `Click a tile to place Marker “${n}” — Esc to cancel`,
+      onPicked: (tile) => {
+        const rec = flowLibrary.addMarker(n, tile.x, tile.y);
+        if (!rec) return;
+        flowLibrary.save();
+        this._createMarker(rec);
+        this._renderMarkerPanel();
+      },
+    });
+    return true;
+  }
+
+  // Delete a Marker. Flows that name it are left exactly as written — never auto-rewritten — and
+  // their Move / Attack-Move nodes park with "no Marker named …" until one is placed again.
+  _deleteMarker(m) {
+    if (m === this._selectedRunner) this._stopInspecting();
+    m.run = null;
+    m.sprite.destroy();
+    m._ui?.el.remove();
+    this._markers = this._markers.filter((x) => x !== m);
+    flowLibrary.removeMarker(m.name);
+    flowLibrary.save();
+    this._renderMarkerPanel();
+  }
+
+  // Bottom-left HUD panel: the Markers in play, their Marker-Flow, and "+ Marker" to place one.
+  // Clicking a name centres the camera on it; ✕ deletes it. Available paused or running.
+  _buildMarkerPanel() {
+    const panel = document.createElement('div');
+    panel.className = 'marker-panel';
+    const head = document.createElement('div');
+    head.className = 'marker-head';
+    const title = document.createElement('span');
+    title.className = 'marker-title';
+    title.textContent = 'Markers';
+    const add = document.createElement('button');
+    add.className = 'marker-add';
+    add.textContent = '+ Marker';
+    head.append(title, add);
+
+    const form = document.createElement('form');
+    form.className = 'marker-form hidden';
+    const input = document.createElement('input');
+    input.className = 'marker-input';
+    input.placeholder = 'name, e.g. front';
+    input.maxLength = 24;
+    const place = document.createElement('button');
+    place.className = 'marker-place';
+    place.type = 'submit';
+    place.textContent = 'Place';
+    form.append(input, place);
+
+    const list = document.createElement('ul');
+    list.className = 'marker-list';
+    panel.append(head, form, list);
+
+    const closeForm = () => { form.classList.add('hidden'); input.value = ''; input.classList.remove('invalid'); };
+    add.addEventListener('click', () => {
+      form.classList.toggle('hidden');
+      if (!form.classList.contains('hidden')) input.focus();
+    });
+    // A taken name is flagged as it is typed: names are a Marker's identity (docs/adr/0024).
+    input.addEventListener('input', () => {
+      input.classList.toggle('invalid', !!flowLibrary.getMarker(input.value.trim()));
+    });
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation(); // keep typing out of the editor's `F` toggle
+      if (e.key === 'Escape') closeForm();
+    });
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (this._placeNewMarker(input.value)) closeForm();
+      else input.classList.add('invalid');
+    });
+
+    // The same pointer swallow as the other HUD panels: Phaser listens on `window`, so a click
+    // here would otherwise fall through and hit-test whatever sits behind the panel.
+    for (const ev of ['pointerdown', 'pointerup', 'mousedown', 'mouseup']) {
+      panel.addEventListener(ev, (e) => e.stopPropagation());
+    }
+    document.body.appendChild(panel);
+    this._markerPanel = panel;
+    this._markerList = list;
+    this._renderMarkerPanel();
+  }
+
+  _renderMarkerPanel() {
+    const list = this._markerList;
+    if (!list) return;
+    list.textContent = '';
+    if (!this._markers.length) {
+      const empty = document.createElement('li');
+      empty.className = 'marker-empty';
+      empty.textContent = 'None yet — Move and Attack-Move head for a Marker by name.';
+      list.appendChild(empty);
+      return;
+    }
+    for (const m of [...this._markers].sort((a, b) => a.name.localeCompare(b.name))) {
+      const row = document.createElement('li');
+      const name = document.createElement('button');
+      name.className = 'marker-name';
+      name.textContent = m.name;
+      name.title = 'Centre the map on this Marker — drag its pin to move it';
+      name.addEventListener('click', () => this.cameras.main.centerOn(m.x, m.y));
+      const flow = document.createElement('span');
+      flow.className = 'marker-flow';
+      flow.textContent = (m.assignedFlowId && flowLibrary.get(m.assignedFlowId)?.name) || '';
+      const del = document.createElement('button');
+      del.className = 'marker-del';
+      del.textContent = '✕';
+      del.title = `Delete Marker “${m.name}”`;
+      del.addEventListener('click', () => this._deleteMarker(m));
+      row.append(name, flow, del);
+      list.appendChild(row);
+    }
+  }
+
   // ── assignment persistence ─────────────────────────────────────────────────
 
   _loadAssignments() {
@@ -2576,8 +2817,10 @@ void main(void){
 
   _saveAssignments() {
     const map = {};
+    // Markers keep their Assignment on their own Library record (docs/adr/0024), not here: this map
+    // is keyed by label, and a Marker's label is a player-chosen name that could shadow "Worker 3".
     for (const r of this._runners())
-      if (r.assignedFlowId && r.faction === FACTION.PLAYER) map[r.label] = r.assignedFlowId;
+      if (r.assignedFlowId && r.faction === FACTION.PLAYER && !r.isMarker) map[r.label] = r.assignedFlowId;
     try { localStorage.setItem(ASSIGN_KEY, JSON.stringify(map)); } catch { /* quota/full */ }
   }
 
@@ -2600,6 +2843,7 @@ void main(void){
       (e) => { this.input.enabled = !(e.detail.open && e.detail.blocking); });
 
     let drag = null;
+    let markerDrag = null; // { marker, ox, oy } while a Marker pin is held (docs/adr/0024)
     // Tracked separately from `drag` so it survives pointerup (which clears `drag`) and is
     // still readable when gameobjectup fires — order between the two isn't guaranteed.
     this._dragMoved = false;
@@ -2612,6 +2856,14 @@ void main(void){
         drag = { ox: p.x, oy: p.y, sx: cam.scrollX, sy: cam.scrollY };
         return;
       }
+      // Pressing on a Marker grabs the Marker instead of the camera (docs/adr/0024) — paused or
+      // running, since moving a destination is the player's one in-match lever that commands no
+      // Unit. A press without movement still falls through to gameobjectup as a click.
+      const marker = over?.map((o) => o.getData?.('marker')).find(Boolean);
+      if (marker && p.leftButtonDown()) {
+        markerDrag = { marker, ox: p.x, oy: p.y };
+        return;
+      }
       // Track a potential drag even when pressing on a Runner, so panning works no matter where
       // the gesture starts. A clean click still selects it (gameobjectup bails once _dragMoved).
       drag = { ox: p.x, oy: p.y, sx: cam.scrollX, sy: cam.scrollY };
@@ -2622,6 +2874,15 @@ void main(void){
         const { tx, ty } = this._pointerTile(p);
         this._updatePickHighlight(tx, ty);
       }
+      if (markerDrag) {
+        if (Math.abs(p.x - markerDrag.ox) + Math.abs(p.y - markerDrag.oy) > 3) this._dragMoved = true;
+        if (!this._dragMoved) return;
+        // Snap to the hovered Tile, and only ever onto a Walkable one: a Marker on a cliff or a
+        // Deposit would send every Unit on it after an unreachable goal.
+        const { tx, ty } = this._pointerTile(p);
+        if (this.walkable(tx, ty)) this._setMarkerTile(markerDrag.marker, tx, ty);
+        return;
+      }
       if (!drag) return;
       if (Math.abs(p.x - drag.ox) + Math.abs(p.y - drag.oy) > 3) this._dragMoved = true;
       cam.setScroll(drag.sx - (p.x - drag.ox), drag.sy - (p.y - drag.oy));
@@ -2631,6 +2892,10 @@ void main(void){
     const endDrag = () => {
       // A click (no drag) in pick mode commits the hovered Tile.
       if (this._pick && !this._dragMoved) this._commitPick();
+      // A Marker moved by hand is an authoring decision, so it is saved where the player dropped
+      // it — once, on release, not on every Tile it was dragged across (docs/adr/0024).
+      if (markerDrag && this._dragMoved) this._saveMarkerPosition(markerDrag.marker);
+      markerDrag = null;
       drag = null;
       this.game.canvas.style.cursor = this._pick ? 'crosshair' : 'grab';
     };
@@ -2646,7 +2911,7 @@ void main(void){
     // previous create()'s `drag` closure.
     this._onOverlayVisibility = (e) => {
       this.input.enabled = !e.detail.open;
-      if (e.detail.open) { drag = null; this._dragMoved = false; }
+      if (e.detail.open) { drag = null; markerDrag = null; this._dragMoved = false; }
       this.game.canvas.style.cursor = this._pick ? 'crosshair' : 'grab';
     };
     window.addEventListener('assign-overlay-visibility', this._onOverlayVisibility);
@@ -2660,8 +2925,21 @@ void main(void){
       // assigns a Flow (player Runners only). The docked inspector leaves the map clickable, so a
       // click on another Runner just switches who is inspected.
       if (this._running) {
-        const runner = (obj.getData && (obj.getData('unit') || obj.getData('building'))) || null;
+        const runner = (obj.getData && (obj.getData('unit') || obj.getData('building') || obj.getData('marker'))) || null;
         if (runner) this._inspectRunner(runner);
+        return;
+      }
+      // A Marker takes Marker-Flows (docs/adr/0024). Its Assignment is saved on its Library record,
+      // so it survives a reload with the Marker itself.
+      const marker = obj.getData && obj.getData('marker');
+      if (marker) {
+        openAssignOverlay(marker, flowLibrary, 'marker', (mk) => {
+          const rec = flowLibrary.getMarker(mk.name);
+          if (rec) { rec.flowId = mk.assignedFlowId; flowLibrary.save(); }
+          this._refreshMarkerLabel(mk);
+          this._renderMarkerPanel();
+          this._startRun(mk);
+        });
         return;
       }
       const unit = obj.getData && obj.getData('unit');

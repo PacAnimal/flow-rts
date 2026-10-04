@@ -10,7 +10,7 @@ then run them. This document is the glossary for that domain. It is not a spec.
 A reusable node graph defining a behaviour. Flows live in the Library and are assigned to
 Runners to control them. A Flow is a shared *definition*: assigning one Flow to several
 Runners means they all run the same definition (edit it once, all run the change), while each
-Runner keeps its own execution state. Each Flow **targets one Runner kind** (Unit or Building),
+Runner keeps its own execution state. Each Flow **targets one Runner kind** (Unit, Building, or Marker),
 which fixes the Actions its palette offers and limits which Runners it can be assigned to — a
 Building-Flow cannot be assigned to a Unit. A Building-Flow further targets one **building type**
 (e.g. Command Center, Barracks), which fixes the Units its Train offers and limits it to that one
@@ -34,11 +34,11 @@ _Avoid_: folder, tag, group, catalogue (Library's avoid-word), bucket
 
 **Runner**:
 Any on-map thing that can be assigned a Flow and hold a Run — the thing a Flow runs *on*.
-Units and Buildings are both Runners; the Assignment, Run, cursor, and OnStart machinery is
-defined on the Runner, not on Units specifically. What a Runner can *do* depends on its kind:
+Units, Buildings and Markers are all Runners; the Assignment, Run, cursor, and OnStart machinery
+is defined on the Runner, not on Units specifically. What a Runner can *do* depends on its kind:
 the interpreter passes the Runner to each node's executor (which the code calls `runner`), and
-the world exposes a kind-appropriate action set (Units move/gather; Buildings produce). A
-Runner runs at most one Flow at a time.
+the world exposes a kind-appropriate action set (Units move/gather; Buildings produce; Markers
+relocate). A Runner runs at most one Flow at a time.
 _Avoid_: host, agent, actor, entity, owner
 
 **Faction**:
@@ -160,10 +160,12 @@ the Data port's inline default — the value used when nothing is wired to it.
 _Avoid_: value port, argument port
 
 **Parameter**:
-A named, typed value configured on a Node itself (e.g. Move's `destination`, a Tile).
+A named, typed value configured on a Node itself (e.g. Move's `marker`, a Marker's name).
 Distinct from a Port: a Parameter is set on the node (no Connection involved). When the
 matching Data port is later wired, the incoming value overrides the Parameter. A
-Parameter may be unset — a valid authoring state, since nothing executes yet.
+Parameter may be unset — a valid authoring state, since nothing executes yet. A Parameter
+may name something rather than hold it: Move's `marker` names a Marker, resolved to a Tile by the
+world each time the node runs.
 _Avoid_: property, field, attribute, setting
 
 **Connection**:
@@ -177,7 +179,7 @@ _Avoid_: workspace, board, sheet
 
 **Tile**:
 One cell of the map's grid. The map is a grid of Tiles. A Tile is addressed by integer
-coordinates {x, y} in Tile units (not pixels); positions like Move's destination are
+coordinates {x, y} in Tile units (not pixels); positions like a Marker's or Build's Location are
 stored this way and converted to pixels only when something moves.
 _Avoid_: cell, square, grid square
 
@@ -186,9 +188,23 @@ A property of a Tile that a Unit may stand on or move to: lowland ground and ram
 Hill (plateau) Tiles are not Walkable. Walkability is terrain-type passability of a single
 Tile, distinct from reachability — whether a Unit can actually get to a Tile, which depends
 on a Path of Walkable Tiles connecting them. A Move destination must be Walkable, and is
-carried out only if it is also reachable. Separately, a Tile occupied by a Deposit is blocked
+carried out only if it is also reachable. A Marker can only be placed, dragged, or moved onto a
+Walkable Tile. Separately, a Tile occupied by a Deposit is blocked
 even where the terrain is Walkable — a Unit can neither stand on nor path through it.
 _Avoid_: passable, traversable
+
+**Marker**:
+A named Tile on the map that player Move and Attack-Move nodes head for, in place of a literal
+Tile: `Move → "front"` rather than `Move → (74, 31)`. The world resolves the name every time the
+node runs, so moving a Marker re-routes every Unit already heading for it. A Marker is player-placed
+and can be dragged by hand at any time, including while the match runs — moving a *destination*,
+not commanding a Unit. It is also a Runner, the third kind: it can be assigned a Marker-Flow,
+whose **Move** relocates it instantly (a Marker is a place, not a body; nothing travels). A
+Marker has no Health and occupies no Tile — nothing attacks it or paths around it. Its name is its
+identity: unique, chosen when it is placed, and never renamed (delete and place again). A Flow
+naming a Marker that does not exist waits on that node and says so. Markers are saved with the
+Library, where the player last left them by hand; where a Marker-Flow has moved one is not saved.
+_Avoid_: waypoint (reserved — see Path), rally point, beacon, flag, pin, location
 
 **Path**:
 The route a Unit follows to reach its Move destination: a sequence of waypoints over
@@ -242,8 +258,9 @@ _Avoid_: mob, monster, hostile, AI
 
 **Health**:
 How much damage a destructible map thing can take before it is destroyed — a current/max pair.
-Every Runner carries Health (Units and Buildings alike); so does a Construction Site, which has
-Health without being a Runner. At 0 the thing is **destroyed**: removed from the map (its Footprint
+Every Unit and Building carries Health; so does a Construction Site, which has Health without
+being a Runner. A Marker is the one Runner without Health — it cannot be damaged or destroyed by
+anything but the player deleting it. At 0 the thing is **destroyed**: removed from the map (its Footprint
 freed, for a Building or Construction Site) and, for a Runner, its Run ends. Death is just Health
 reaching 0, not a separate Run status. Max Health (and the other combat numbers) come from a data
 table keyed by type, not from any Node.

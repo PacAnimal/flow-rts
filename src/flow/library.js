@@ -28,6 +28,13 @@ export class FlowLibrary {
     // null for never. Stored with the Library rather than inferred from it being empty: a player
     // who deletes every starter has made a decision, and re-seeding would undo it on reload.
     this.seeded = null;
+    // The player's Markers (CONTEXT.md, docs/adr/0024): named Tiles a Move / Attack-Move resolves by
+    // name. Kept here, beside the Flows that reference them, because a Flow saying `Move → "front"`
+    // is useless if `front` evaporates on reload. Each record is `{ name, x, y, flowId? }`: where the
+    // player last put it by hand, and the Marker-Flow it is assigned. A Marker's Run, and wherever
+    // its own Flow has since moved it, are world state in MapScene and are never saved.
+    /** @type {Array<{name:string, x:number, y:number, flowId?:string|null}>} */
+    this.markers = [];
   }
 
   create(name, targetKind = 'unit', buildingType = null) {
@@ -88,6 +95,39 @@ export class FlowLibrary {
     this.entries = this.entries.filter((e) => e.id !== id);
   }
 
+  // ── Markers (docs/adr/0024) ────────────────────────────────────────────────
+  // A Marker's name is its identity — a Move references it by name, like a Signal — so names are
+  // unique (case-sensitive, trimmed). There is no rename: renaming would silently re-point or orphan
+  // every Flow that names it, so the honest gesture is delete-and-place, which the player sees.
+
+  getMarker(name) {
+    return this.markers.find((m) => m.name === name) || null;
+  }
+
+  // Add a Marker at a Tile. Returns the record, or null for a blank or already-used name.
+  addMarker(name, x, y) {
+    const n = (name || '').trim();
+    if (!n || this.getMarker(n)) return null;
+    const marker = { name: n, x, y, flowId: null };
+    this.markers.push(marker);
+    return marker;
+  }
+
+  removeMarker(name) {
+    this.markers = this.markers.filter((m) => m.name !== name);
+  }
+
+  // The names a markerName Parameter can suggest: every placed Marker, plus any name a Flow already
+  // references but no Marker answers to (so a Flow authored before its Marker still converges on
+  // one spelling). Sorted, like categories().
+  markerNames() {
+    const set = new Set(this.markers.map((m) => m.name));
+    for (const e of this.entries)
+      for (const n of e.model.nodes)
+        if (n.params?.marker) set.add(n.params.marker);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }
+
   list() {
     return this.entries;
   }
@@ -97,6 +137,7 @@ export class FlowLibrary {
   toJSON() {
     return {
       ...(this.seeded ? { seeded: this.seeded } : {}),
+      markers: this.markers.map((m) => ({ name: m.name, x: m.x, y: m.y, flowId: m.flowId ?? null })),
       entries: this.entries.map((e) => ({
         id: e.id, name: e.name, model: e.model.toJSON(),
         ...(e.protected ? { protected: true } : {}),
@@ -130,6 +171,19 @@ export class FlowLibrary {
         ...(e.category ? { category: e.category } : {}),
       }));
       bumpSeqFrom(this.entries.map((e) => e.id));
+      this.markers = (data?.markers ?? [])
+        .filter((m) => m && m.name && Number.isFinite(m.x) && Number.isFinite(m.y))
+        .map((m) => ({ name: m.name, x: m.x, y: m.y, flowId: m.flowId ?? null }));
+      // Player Unit Flows no longer take a literal Tile on Move / Attack-Move — they name a Marker
+      // (docs/adr/0024). A Flow saved before that still carries a picked `destination`, which the
+      // editor can no longer show; left in place it would keep steering Units invisibly, so it is
+      // dropped here and the node reads as unset (⚠) until a Marker is chosen. Only the Library is
+      // migrated: level-authored Enemy Flows (src/scenario.js) never pass through here and keep
+      // their injected Tiles.
+      for (const e of this.entries)
+        for (const n of e.model.nodes)
+          if ((n.kind === 'Move' || n.kind === 'AttackMove') && n.params && 'destination' in n.params)
+            delete n.params.destination;
     } catch { /* corrupt — start empty */ }
   }
 }

@@ -38,7 +38,7 @@ is shaped the way it is. Consult them before non-trivial changes:
   precise meaning and a list of words to *avoid*. Use the exact vocabulary (Flow, Runner, Run,
   Node, Exec/Data port, Parameter, Deposit, Cargo, Stockpile, Scenario, Wave, Objective, …). Do not
   call a Flow a "graph" or a Deposit a "resource node". This matters for both code and comments.
-- **`docs/adr/`** — 23 Architecture Decision Records (numbered `0001`–`0023`). Code comments cite
+- **`docs/adr/`** — 24 Architecture Decision Records (numbered `0001`–`0024`). Code comments cite
   them constantly (e.g. `docs/adr/0006`). When you touch a subsystem, the relevant ADR explains the
   constraint you must preserve. Adding a significant architectural decision means writing a new ADR.
 
@@ -65,7 +65,8 @@ This keeps `runtime.js`, `movement.js`, `combat.js`, `pathfinding.js`, `units.js
   `connections`. The single source of truth; the editor renders from it. Enforces connection rules
   (exec→exec, output→input, exec-output cardinality of 1).
 - **`src/flow/nodeKinds.js`** — pure, serializable descriptors for every node kind (category, title,
-  ports, params, and the `runner` kind it applies to: `'any'` / `'unit'` / `'building'`). Adding a
+  ports, params, and the `runner` kind it applies to: `'any'` / `'unit'` / `'building'` /
+  `'marker'`). Adding a
   node kind = a descriptor here + an executor in `runtime.js`. Keep descriptors data-only.
 - **`src/flow/runtime.js`** — the interpreter. `startRun` / `tickRun` advance a per-Runner **Run**
   `{ flowId, current, status, state }`. The cursor reads the *live* model each tick (edits take
@@ -81,7 +82,11 @@ This keeps `runtime.js`, `movement.js`, `combat.js`, `pathfinding.js`, `units.js
   Svelte-store-shaped `{get,set,update,subscribe}`) that triggers a re-render.
 - **`src/flow/library.js`** — `flowLibrary`, the app-wide singleton collection of named Flows,
   persisted to `localStorage`. A Flow is a *shared definition* (ADR-0003): many Runners can run one
-  Flow; editing it changes all of them. Each runner keeps its own Run state.
+  Flow; editing it changes all of them. Each runner keeps its own Run state. The Library also
+  stores the player's **Markers** (`library.markers`, ADR-0024). These are named Tiles that player
+  Move / Attack-Move resolve by name through `world.markerTile`. Markers are also the third Runner
+  kind: their own Marker-Flow's `MoveMarker` relocates them. `load()` strips legacy literal
+  `destination`s from player Move / Attack-Move. Only level-authored Enemy Flows still set them.
 - **`src/flow/assign.js`** / `positionPicker.js` — assigning a Flow to a Runner; picking a map Tile
   for a `tile` parameter (e.g. Move's destination).
 - **`src/flow/templates.js`** — `STARTER_FLOWS`, the worked-example Flows seeded into the Library on

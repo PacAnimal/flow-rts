@@ -84,14 +84,15 @@ export const STARTER_FLOWS = [
     key: 'rally',
     name: 'Rally and Hold',
     targetKind: 'unit',
-    // A picket line. The one starter with something left to fill in: pick Move's destination on the
-    // map and every Unit running this Flow heads there. `spread` is already on, which is the part
-    // worth seeing — each Runner claims a distinct Tile near the destination instead of a dozen
-    // Units shoving over one (docs/adr/0020).
+    // A picket line. The one starter with something left to do: it heads for the Marker `rally`
+    // (docs/adr/0024), which the player has to place — until then the Run parks on Move and says
+    // so, which is itself the lesson that a Flow names a place and the map supplies it. Drag the
+    // Marker mid-match and the whole line re-forms there. `spread` is already on: each Runner
+    // claims a distinct Tile near the Marker instead of a dozen Units shoving over one (ADR-0020).
     build: () => {
       const m = new FlowModel('unit');
       const start = add(m, 'OnStart', 60, 40);
-      const move = add(m, 'Move', 60, 160, { spread: true }); // destination: for the author to pick
+      const move = add(m, 'Move', 60, 160, { marker: 'rally', spread: true });
       const hold = add(m, 'Hold', 60, 300);
       wire(m, start, 'out', move);
       wire(m, move, 'out', hold);

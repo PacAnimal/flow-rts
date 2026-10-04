@@ -5,8 +5,9 @@
 // editor. See CONTEXT.md and docs/adr/0002.
 //
 // `runner` is which Runner kind a node applies to (docs/adr/0015): 'any' (Events / Flow
-// Control, valid on every Flow), 'unit' (Unit Actions), or 'building' (Building Actions). The
-// editor palette shows a node only when it matches the edited Flow's targetKind.
+// Control, valid on every Flow), 'unit' (Unit Actions), 'building' (Building Actions), or
+// 'marker' (Marker Actions, docs/adr/0024). The editor palette shows a node only when it matches
+// the edited Flow's targetKind.
 
 export const NODE_KINDS = {
   OnStart: {
@@ -118,14 +119,16 @@ export const NODE_KINDS = {
       { id: 'in', dir: 'in', type: 'exec', label: '' },
       { id: 'out', dir: 'out', type: 'exec', label: '' },
     ],
-    // Parameters: literals configured on the node (ADR-0004). 'destination' is a Tile,
-    // picked on the map via "Select Position"; it is the inline default of the future
-    // 'destination' Data port reserved in ADR-0002. 'spread' (docs/adr/0020) makes several
-    // Runners sharing one Flow fan out: each claims a distinct Tile near the destination
-    // instead of all stacking on the one Tile — for patrol/rally lines. Off ⇒ all head to
-    // the exact destination (today's behaviour); a full area falls back to it, never blocks.
+    // Parameters: literals configured on the node (ADR-0004). 'marker' names the Marker to head
+    // for (docs/adr/0024), resolved through the world every tick — so dragging the Marker, or its
+    // own Flow moving it, re-routes every Unit on this node at once. A player Flow cannot name a
+    // literal Tile here; the undeclared `destination` param is read only by level-authored Enemy
+    // Flows (src/scenario.js), which have no Markers and are never shown in the editor.
+    // 'spread' (docs/adr/0020) makes several Runners sharing one Flow fan out: each claims a
+    // distinct Tile near the destination instead of all stacking on the one Tile — for
+    // patrol/rally lines. Off ⇒ all head to the exact Tile; a full area falls back to it.
     params: [
-      { id: 'destination', type: 'tile', label: 'Destination', pickLabel: 'Select Position…' },
+      { id: 'marker', type: 'markerName', label: 'Marker' },
       { id: 'spread', type: 'boolean', label: 'Spread out', default: false },
     ],
   },
@@ -166,14 +169,15 @@ export const NODE_KINDS = {
     category: 'action',
     runner: 'unit',
     title: 'Attack-Move',
-    // Move toward the destination Tile; engage any Enemy that enters the aggro radius en route,
-    // then resume. Completes on arrival (docs/adr/0012). Chainable like any Action.
+    // Move toward the named Marker; engage any Enemy that enters the aggro radius en route, then
+    // resume. Completes on arrival (docs/adr/0012). Chainable like any Action. Like Move it names a
+    // Marker (docs/adr/0024); only Enemy Flows set the undeclared literal `destination`.
     ports: [
       { id: 'in', dir: 'in', type: 'exec', label: '' },
       { id: 'out', dir: 'out', type: 'exec', label: '' },
     ],
     params: [
-      { id: 'destination', type: 'tile', label: 'Destination', pickLabel: 'Select Position…' },
+      { id: 'marker', type: 'markerName', label: 'Marker' },
     ],
   },
 
@@ -289,6 +293,25 @@ export const NODE_KINDS = {
     ports: [
       { id: 'in', dir: 'in', type: 'exec', label: '' },
       { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+  },
+
+  MoveMarker: {
+    kind: 'MoveMarker',
+    category: 'action',
+    runner: 'marker',
+    title: 'Move',
+    // The Marker Action (docs/adr/0024): put this Marker on the chosen Tile — instantly, it is a
+    // place, not a body, so there is no travel and nothing to path. Every Unit heading for the
+    // Marker re-routes on its next tick. Instant like SetSignal, so a loop of Moves needs a Wait to
+    // pace it (CONTEXT.md Flow Control). The one place a player Flow still names a literal Tile:
+    // a Marker Flow is how the player scripts where a destination *is*. Unset ⇒ no-op (ADR-0004).
+    ports: [
+      { id: 'in', dir: 'in', type: 'exec', label: '' },
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+    params: [
+      { id: 'destination', type: 'tile', label: 'Position', pickLabel: 'Select Position…' },
     ],
   },
 

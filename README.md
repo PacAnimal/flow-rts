@@ -41,8 +41,8 @@ tilemap, Buildings, Units and Decorations. Handy when iterating on the GLSL.
    Flow they run (hover a row for what that Flow does). That is the challenge you are authoring
    against; it folds down to a next-Wave countdown once you press Start.
 2. **Open the editor** — the button on the canvas, or press `F`.
-3. **Pick or create a Flow** in the Library panel. A Flow targets one Runner kind (Unit or
-   Building); a Building-Flow further targets one building type, which fixes the Units its Train
+3. **Pick or create a Flow** in the Library panel. A Flow targets one Runner kind (Unit,
+   Building, or Marker); a Building-Flow further targets one building type, which fixes the Units its Train
    node offers. Flows can be filed under a freeform Category to keep the Library tidy.
 
    On a first run the Library is seeded with five **starter Flows** under a *Starters* Category —
@@ -51,16 +51,22 @@ tilemap, Buildings, Units and Decorations. Handy when iterating on the GLSL.
    idioms nothing else announces: a loop is a Connection wired *backward* and must contain a node
    that waits; an Interrupt reacts without the main line polling; a Branch caps a production loop.
    Assign Gather Loop to your Workers and Train Workers to 6 to the Command Center and you have a
-   working economy without authoring anything. Only Rally and Hold needs filling in — its Move
-   destination, flagged with a ⚠ on the node.
+   working economy without authoring anything. Only Rally and Hold needs something from you: a
+   Marker named `rally` to head for. Until you place one, its Units wait on Move and the inspector
+   says why.
 4. **Author it.** Drag node kinds from the palette onto the Canvas, wire Exec output → Exec input,
-   and fill in each node's Parameters (a Move destination is picked by clicking a Tile on the map).
+   and fill in each node's Parameters. Move and Attack-Move name a **Marker** rather than a Tile;
+   Build's Location is picked by clicking a Tile on the map.
    There is no loop node: a loop is a Connection wired *backward* to an earlier node, gated by a
    Branch and paced by a Wait. `Ctrl/Cmd+Z` undoes, `Delete` removes the selection, `Esc` clears it.
-5. **Assign it.** Close the editor and click a Runner. The assign overlay lists only the Flows that
+5. **Place Markers.** The Markers panel (bottom-left) places a named Marker: type a name, then
+   click a Tile. Drag a pin to move it at any time, even mid-match. Every Unit heading for that
+   Marker re-routes, which is your one in-match lever that commands no Unit. A Marker is a Runner
+   too: assign it a Marker-Flow, and that Flow's Move relocates it (ADR-0024).
+6. **Assign it.** Close the editor and click a Runner. The assign overlay lists only the Flows that
    match that Runner — Unit-Flows for Units, this-building-type Flows for Buildings. Assigning
    replaces any previous Assignment and starts a fresh Run.
-6. **Press ▶ Start.** The toolbar also carries Pause, ↻ Restart, and a ×1–×16 speed control (the
+7. **Press ▶ Start.** The toolbar also carries Pause, ↻ Restart, and a ×1–×16 speed control (the
    sim is advanced by running that many substeps per rendered frame, not by scaling time, so
    steering and Tile occupancy stay stable at speed). While
    the simulation runs, clicking any Runner docks the editor beside the map as a read-only
@@ -69,7 +75,7 @@ tilemap, Buildings, Units and Decorations. Handy when iterating on the GLSL.
    "waiting for 30 alloys" (ADR-0023). That is the way to see what your Flow is actually doing.
 
 Drag the map to pan, scroll to zoom. The Library persists to `localStorage`, so your Flows survive
-a reload. Runs do not: reloading restarts every Runner from its Flow's On Start.
+a reload, and so do your Markers, at the spot you last dragged them to. Runs do not: reloading restarts every Runner from its Flow's On Start.
 
 Because a Flow is a *shared definition*, assigning one Flow to six Workers means all six run the
 same definition and an edit changes all of them at once — while each keeps its own execution state.
@@ -100,13 +106,15 @@ purely reactive.
 
 ### Actions
 
-Unit Actions: **Move** (A\* path to a Tile, optionally spread), **Gather Resources**,
+Unit Actions: **Move** (A\* path to a named Marker, optionally spread), **Gather Resources**,
 **Deliver Resources**, **Attack-Move**, **Hold Position**, **Retreat**, **Construct**, and
 **Roam and Attack** (the critter behaviour).
 
 Building Actions: **Train Unit** (blocks on the Stockpile, then produces a Unit already running a
 Flow you nominate), **Research Upgrade**, and **Build** (places a Construction Site for Workers to
 raise).
+
+Marker Action: **Move**, which relocates the Marker to a Tile instantly.
 
 **Set Signal** works on any Runner.
 
@@ -189,7 +197,7 @@ type is a new table entry:
 
 ```
 src/            game source (see module map above)
-docs/adr/       23 Architecture Decision Records
+docs/adr/       24 Architecture Decision Records
 CONTEXT.md      the domain glossary — the source of truth for terminology
 CLAUDE.md       working notes for Claude Code
 index.html      Vite entry
@@ -208,7 +216,7 @@ the way it is:
 - **`CONTEXT.md`** — the domain glossary. Terminology is enforced with discipline: every term has a
   precise meaning and a list of words to avoid. A Flow is not a "graph"; a Deposit is not a
   "resource node". The vocabulary is expected to hold in code, identifiers and comments.
-- **`docs/adr/`** — 23 Architecture Decision Records. Code comments cite them constantly (e.g.
+- **`docs/adr/`** — 24 Architecture Decision Records. Code comments cite them constantly (e.g.
   `docs/adr/0006`); when you touch a subsystem, the matching ADR explains the constraint you need
   to preserve. A significant new architectural decision means a new ADR.
 

@@ -87,7 +87,7 @@ export function openAssignOverlay(unit, library, targetKind, onAssigned, buildin
   });
   const kindLabel = targetKind === 'building'
     ? (getBuildingType(buildingType)?.label || 'building')
-    : 'unit';
+    : targetKind; // 'unit' or 'marker' (docs/adr/0024)
   if (flows.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'assign-empty';

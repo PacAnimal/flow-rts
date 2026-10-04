@@ -138,6 +138,11 @@ export class FlowEditor {
       btn.addEventListener('click', () => this._newFlow('building', b.id));
       newRow.appendChild(btn);
     }
+    // Markers are the third Runner kind (docs/adr/0024): a Marker-Flow scripts where a named
+    // destination is, through the Marker's own Move.
+    const newMarker = el('button', 'lib-new', '+ Marker');
+    newMarker.addEventListener('click', () => this._newFlow('marker'));
+    newRow.appendChild(newMarker);
     libHead.appendChild(newRow);
     libPanel.appendChild(libHead);
     this.libList = el('div', 'lib-list');
@@ -390,9 +395,11 @@ export class FlowEditor {
   }
 
   // A Flow's human-readable kind: its building type's label for a building Flow (docs/adr/0016),
-  // else "unit". Drives the canvas header and the Library row tag.
+  // "marker" for a Marker-Flow (docs/adr/0024), else "unit". Drives the canvas header and the
+  // Library row tag.
   _kindLabel(model) {
     if (model.targetKind === 'building') return getBuildingType(model.buildingType)?.label || 'building';
+    if (model.targetKind === 'marker') return 'marker';
     return 'unit';
   }
 
@@ -903,7 +910,8 @@ export class FlowEditor {
         buildableBuildings().map((b) => ({ value: b.id, label: b.label })));
     if (param.type === 'buildingFlowRef')
       return this._selectParam(node, param, this._buildingFlowOptions(node));
-    if (param.type === 'signalName') return this._signalNameParam(node, param);
+    if (param.type === 'signalName') return this._nameParam(node, param, this._signalNames());
+    if (param.type === 'markerName') return this._nameParam(node, param, this.library.markerNames());
     if (param.type === 'boolean') return this._booleanParam(node, param);
     const row = el('div', 'param-row');
     row.appendChild(el('span', 'param-label', param.label));
@@ -913,10 +921,11 @@ export class FlowEditor {
     return row;
   }
 
-  // A 'signalName' Parameter (docs/adr/0022): a free-text input for a Faction Signal's name, backed
-  // by a datalist of names already used across the Library so coordinating Flows converge on one
+  // A freeform-name Parameter — 'signalName' (docs/adr/0022) or 'markerName' (docs/adr/0024): a
+  // free-text input backed by a datalist of `names` already in use, so Flows converge on one
   // spelling without a managed roster — yet a brand-new name is still just typed in. Empty ⇒ unset.
-  _signalNameParam(node, param) {
+  // A Marker name need not exist yet: the Move parks, saying so, until the Marker is placed.
+  _nameParam(node, param, names) {
     const row = el('div', 'param-row');
     row.appendChild(el('span', 'param-label', param.label));
     const input = el('input', 'param-input');
@@ -924,8 +933,8 @@ export class FlowEditor {
     input.placeholder = '—';
     input.value = (node.params && node.params[param.id]) || '';
     const list = el('datalist');
-    list.id = `signals-${node.id}-${param.id}`;
-    for (const name of this._signalNames()) list.appendChild(el('option')).value = name;
+    list.id = `names-${node.id}-${param.id}`;
+    for (const name of names) list.appendChild(el('option')).value = name;
     input.setAttribute('list', list.id);
     // Don't let pointer/keys on the input start a node-drag or trigger editor shortcuts.
     input.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -1459,8 +1468,9 @@ export class FlowEditor {
 // editor can warn (see _diagnostics). Optional-by-design params (Hold/Wait duration, Move spread,
 // Build's assignFlow) are deliberately absent. Mirrors the executors' expectations in runtime.js.
 const REQUIRED_PARAMS = {
-  Move: ['destination'],
-  AttackMove: ['destination'],
+  Move: ['marker'],
+  AttackMove: ['marker'],
+  MoveMarker: ['destination'],
   Train: ['unitType'],
   Research: ['upgradeType'],
   Build: ['buildingType', 'destination'],

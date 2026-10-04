@@ -33,16 +33,33 @@ const RUNNING = { status: 'running', reason: '' };
 const running = (reason) => (reason ? { status: 'running', reason } : RUNNING);
 const done = (out = 'out') => ({ status: 'done', out });
 
+// Where a Move / Attack-Move is headed (docs/adr/0024). A player Flow names a Marker, resolved
+// through the world on every tick so a dragged (or Flow-moved) Marker re-routes everyone already on
+// the node; a level-authored Enemy Flow carries a literal `destination` instead. Returns
+// `{ dest }` to go, `{ dest: null }` when nothing is set (an unset Parameter is a no-op, ADR-0004),
+// or `{ missing }` when the named Marker does not exist — that parks with a reason (ADR-0023)
+// rather than completing, so `Move(front) → Hold` waits for `front` instead of holding wherever
+// the Unit happens to be, and resumes the moment the player places it.
+function destinationOf(node, world) {
+  const name = node.params?.marker;
+  if (name) {
+    const dest = world.markerTile(name);
+    return dest ? { dest } : { missing: `no Marker named "${name}"` };
+  }
+  return { dest: node.params?.destination || null };
+}
+
 const EXECUTORS = {
   // Events have no effect — they are entry points. Fire and advance into whatever they wire to.
   // OnStart roots the base Frame; OnTimer roots a pushed interrupt-handler Frame (docs/adr/0019).
   OnStart: () => done(),
   OnTimer: () => done(),
 
-  // Glide toward the destination Tile; hold the cursor until arrival. An unset destination
-  // is a valid authoring state (ADR-0004) — treat it as a no-op and advance immediately.
+  // Glide toward the Marker's Tile; hold the cursor until arrival. An unset Marker is a valid
+  // authoring state (ADR-0004) — treat it as a no-op and advance immediately.
   Move: (node, runner, world) => {
-    const dest = node.params?.destination;
+    const { dest, missing } = destinationOf(node, world);
+    if (missing) return running(missing);
     if (!dest) return done();
     // With `spread` set, fan out instead of stacking (docs/adr/0020): head to a distinct Tile
     // claimed near the destination, so several Runners sharing one Flow settle on separate Tiles.
@@ -96,11 +113,12 @@ const EXECUTORS = {
     return done();
   },
 
-  // Attack-Move toward the destination Tile, engaging Enemies in the aggro radius on the way
+  // Attack-Move toward the Marker's Tile, engaging Enemies in the aggro radius on the way
   // (docs/adr/0012). The world owns targeting/movement; the executor sets the intent and holds
-  // the cursor until arrival (and not mid-fight). Unset destination ⇒ no-op, advance.
+  // the cursor until arrival (and not mid-fight). Unset Marker ⇒ no-op, advance.
   AttackMove: (node, runner, world) => {
-    const dest = node.params?.destination;
+    const { dest, missing } = destinationOf(node, world);
+    if (missing) return running(missing);
     if (!dest) return done();
     world.attackMove(runner, dest);
     if (world.attackMoveArrived(runner)) return done();
@@ -186,6 +204,15 @@ const EXECUTORS = {
     }
     if (world.attackMoveArrived(runner)) return done();
     return running(world.engaged?.(runner) ? 'engaging an Enemy' : 'roaming');
+  },
+
+  // Put this Marker on a Tile, then advance — instant (docs/adr/0024). A Marker is a place, not a
+  // body: nothing travels, so there is nothing to wait for. The world snaps an unwalkable pick to
+  // the nearest Walkable Tile; Units bound for the Marker re-route on their own next tick.
+  MoveMarker: (node, runner, world) => {
+    const dest = node.params?.destination;
+    if (dest) world.relocateMarker(runner, dest);
+    return done();
   },
 
   // Raise or lower a Faction Signal (docs/adr/0022), then advance — instant. The world owns the

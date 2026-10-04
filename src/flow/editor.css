@@ -184,6 +184,85 @@
 .wave-plan.plan-flank      { background: #2f3f63; color: #b9d0ff; } /* blue: comes from elsewhere */
 .wave-plan.plan-infiltrate { background: #6b2430; color: #ffc2cc; } /* red: walks past the line */
 
+/* Markers panel (docs/adr/0024): bottom-left, out of the way of the Wave briefing above it. Violet
+   to match the Marker pin on the map and the `marker` kind tag in the Library. */
+.marker-panel {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 1100;
+  width: 232px;
+  padding: 8px 12px 9px;
+  font: 600 12px/1.45 system-ui, sans-serif;
+  color: #e6c4ff;
+  background: rgba(20, 26, 31, 0.82);
+  border: 1px solid #5c4570;
+  border-radius: 6px;
+}
+.marker-head { display: flex; align-items: center; justify-content: space-between; }
+.marker-title { font-weight: 800; letter-spacing: 0.04em; }
+.marker-add, .marker-place {
+  padding: 3px 8px;
+  font: 700 11px/1 system-ui, sans-serif;
+  color: #f3e6ff;
+  background: #3e2c4a;
+  border: 1px solid #6e5585;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.marker-add:hover, .marker-place:hover { background: #4e3860; }
+.marker-form { display: flex; gap: 6px; margin-top: 7px; }
+.marker-form.hidden { display: none; }
+.marker-input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  font: 500 12px/1.2 system-ui, sans-serif;
+  color: #f3e6ff;
+  background: #171c21;
+  border: 1px solid #5c4570;
+  border-radius: 4px;
+}
+.marker-input.invalid { border-color: #d55; }
+.marker-list {
+  max-height: 24vh;
+  margin: 7px 0 0;
+  padding: 6px 0 0;
+  overflow-y: auto;
+  list-style: none;
+  border-top: 1px solid #45364f;
+}
+.marker-list li { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+.marker-name {
+  padding: 0;
+  font: 700 12px/1.45 system-ui, sans-serif;
+  color: #f0dcff;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.marker-name:hover { color: #fff; text-decoration: underline; }
+.marker-flow {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+  color: #7df9ff;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.marker-del {
+  padding: 0 2px;
+  font: 700 11px/1 system-ui, sans-serif;
+  color: #a58fb5;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.marker-del:hover { color: #ff8080; }
+.marker-empty { font-weight: 500; color: #a58fb5; }
+
 /* Objective banner (docs/adr/0014): centred win/lose card over the map. */
 .level-banner {
   position: fixed;
@@ -214,6 +293,7 @@
 }
 .lib-kind.kind-unit     { background: #2c4a5e; color: #bfe3ff; }
 .lib-kind.kind-building { background: #4a3b2c; color: #ffdcb0; }
+.lib-kind.kind-marker   { background: #3e2c4a; color: #e6c4ff; }
 
 .lib-protected {
   font-size: 9px;
