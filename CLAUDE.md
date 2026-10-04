@@ -115,8 +115,11 @@ Game numbers live in data tables, **not** as node Parameters — adding a type i
   registry of which are *researched* is world state in MapScene, not here.
 - **`src/conditions.js`** — the Branch Condition catalog (metadata only; evaluation is in MapScene).
 - **`src/decorations.js`** — scatterable map scenery + footprints.
-- **`src/scenario.js`** — `SCENARIO` (the survival Waves) + builders for the data-authored Enemy and
-  critter Flows that are kept *out* of the Library (ADR-0011, ADR-0014).
+- **`src/scenario.js`** — `SCENARIO` (the survival Waves) + `ENEMY_FLOWS`, the named Enemy Flows a
+  Wave picks from via its `flow` field (rush / raid / flank / infiltrate), and the critter Flow. All
+  data-authored and kept *out* of the Library (ADR-0011, ADR-0014). The builders are pure: MapScene
+  resolves each Wave's destination Tiles (`_enemyTargetTile` / `_enemyEconomyTile` /
+  `_enemyFlankTile`) and injects them, and one model is shared by the whole Wave (ADR-0003).
 - **`src/constants.js`** — the handful of shared magic numbers: `TILE` (64), `EXTRUDE`,
   `UNIT_SPEED`, `UNIT_CARRY_CAPACITY`. Not a per-type table, but the same rule applies — a number
   used in two places belongs here, not inlined.

@@ -357,8 +357,11 @@ _Avoid_: level (the in-world map), mission, map, stage
 **Wave**:
 A timed group of Enemy spawns within a Scenario: a number of Enemy Units of a type, appearing at
 a spawn point at a scheduled time, each born already running a data-authored Flow (the same
-born-with-a-Flow mechanism Train uses). Waves are a data timeline the world plays out, not a
-Flow.
+born-with-a-Flow mechanism Train uses). A Wave **names which** Enemy Flow that is — the Scenario
+keeps a small set of them, and what escalates across a Scenario is as much the Flow a Wave runs
+(rush the base, raid the Deposit field, flank, infiltrate) as the count and type of its Units. Every
+Unit in one Wave shares that single Flow and keeps its own Run, like any shared definition. Waves
+are a data timeline the world plays out, not a Flow.
 _Avoid_: spawn, round, horde, swarm
 
 **Objective**:

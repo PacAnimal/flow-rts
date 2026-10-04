@@ -112,7 +112,7 @@
   top: 88px;
   left: 12px;
   z-index: 1100;
-  width: 236px;
+  width: 272px;
   padding: 8px 12px 10px;
   font: 600 12px/1.45 system-ui, sans-serif;
   color: #ffc9c9;
@@ -159,9 +159,30 @@
 }
 .wave-list li.spent { opacity: 0.38; }        /* already arrived */
 .wave-list li.next  { color: #fff0f0; font-weight: 800; }
-.wave-at    { width: 38px; font-variant-numeric: tabular-nums; }
-.wave-count { flex: 1; }
-.wave-dir   { opacity: 0.75; }
+.wave-at    { width: 34px; font-variant-numeric: tabular-nums; }
+.wave-count { flex: 1; white-space: nowrap; }
+.wave-dir   { opacity: 0.7; }
+
+/* The Enemy Flow a Wave runs (docs/adr/0011 amendment), colour-coded so a glance down the briefing
+   shows what KIND of trouble is coming, not just how much. Rush is deliberately the quiet one —
+   it is the baseline the other three are deviations from. */
+.wave-plan {
+  width: 58px;
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-align: center;
+  text-transform: uppercase;
+  border-radius: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wave-plan.plan-rush       { background: #3a3030; color: #c9b4b4; }
+.wave-plan.plan-raid       { background: #5e4418; color: #ffd99a; } /* amber: goes for the economy */
+.wave-plan.plan-flank      { background: #2f3f63; color: #b9d0ff; } /* blue: comes from elsewhere */
+.wave-plan.plan-infiltrate { background: #6b2430; color: #ffc2cc; } /* red: walks past the line */
 
 /* Objective banner (docs/adr/0014): centred win/lose card over the map. */
 .level-banner {

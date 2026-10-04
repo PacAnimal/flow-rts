@@ -6,8 +6,12 @@ Buildings on the map (collectively **Runners**), press Start, and watch your pro
 
 The current Scenario is a survival defence. Workers gather from Deposits, a Command Center trains
 and builds, a Barracks and Factory field an army, and fifteen escalating Waves of Chojins arrive
-over roughly ten minutes. You win by outlasting every Wave; you lose the moment the Command Center
-falls. Every decision your side makes during those ten minutes was authored before the clock started.
+over roughly ten minutes. They do not all come the same way: a Wave may **rush** the Command Center,
+**raid** the Deposit field and camp it killing Workers, **flank** in from an edge it did not spawn
+on, or **infiltrate** — walk straight through your line without stopping to fight and only engage
+once it is standing on your base. You win by outlasting every Wave; you lose the moment the Command
+Center falls. Every decision your side makes during those ten minutes was authored before the clock
+started.
 
 Vanilla ES modules, Phaser 3 for rendering, Vite for dev/build. No framework, no TypeScript
 (JSDoc types only), no test suite.
@@ -33,8 +37,9 @@ tilemap, Buildings, Units and Decorations. Handy when iterating on the GLSL.
 ## Playing a match
 
 1. **Read the briefing.** The Wave panel on the left lists the Scenario's whole timeline — when
-   each Wave lands, how many Enemies of which type, and the map edge they come from. That is the
-   challenge you are authoring against; it folds down to a next-Wave countdown once you press Start.
+   each Wave lands, how many Enemies of which type, the map edge they come from, and which Enemy
+   Flow they run (hover a row for what that Flow does). That is the challenge you are authoring
+   against; it folds down to a next-Wave countdown once you press Start.
 2. **Open the editor** — the button on the canvas, or press `F`.
 3. **Pick or create a Flow** in the Library panel. A Flow targets one Runner kind (Unit or
    Building); a Building-Flow further targets one building type, which fixes the Units its Train
@@ -165,8 +170,9 @@ type is a new table entry:
   each grants.
 - `src/conditions.js` — the Branch Condition catalog (metadata only; evaluation lives in MapScene).
 - `src/decorations.js` — scatterable scenery and Footprints.
-- `src/scenario.js` — the survival Waves, plus builders for the data-authored Enemy and critter
-  Flows that are deliberately kept out of the Library.
+- `src/scenario.js` — the survival Waves and the named Enemy Flows each Wave runs (rush / raid /
+  flank / infiltrate), plus the critter Flow. All data-authored and deliberately kept out of the
+  Library; the world injects the destination Tiles so the builders stay engine-free.
 
 ## Repo layout
 

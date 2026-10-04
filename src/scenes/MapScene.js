@@ -26,7 +26,7 @@ import { getUpgrade } from '../upgrades.js';
 import { applyDamage } from '../entities/runner.js';
 import { CombatSystem } from '../combat.js';
 import { AttackEffects } from '../effects.js';
-import { SCENARIO, enemyFlowModel, critterFlowModel } from '../scenario.js';
+import { SCENARIO, enemyFlowModel, getEnemyFlow, critterFlowModel } from '../scenario.js';
 import '../flow/editor.css'; // shared overlay chrome — styles the Start/Pause button
 const MAP_W = 120;
 const MAP_H = 90;
@@ -34,6 +34,9 @@ const MAP_H = 90;
 // A Wave's spawn-point key (src/scenario.js) as the compass word a player would use for that map
 // edge — 'top' is the north edge of the map, and "from the north" is how the briefing reads.
 const COMPASS = { left: 'west', right: 'east', top: 'north', bottom: 'south' };
+// A quarter-turn around the base: the edge a Flank Wave stages toward before attacking in, so it
+// skirts the base rather than running straight through it (src/scenario.js ENEMY_FLOWS.flank).
+const FLANK_FROM = { left: 'top', top: 'right', right: 'bottom', bottom: 'left' };
 const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 // Write only on change: the HUD text below is refreshed every frame, and an untouched textContent
 // costs nothing while an assigned one invalidates layout.
@@ -941,25 +944,69 @@ export class MapScene extends Phaser.Scene {
 
   _spawnWave(wave) {
     const origin = this._spawnPoint(wave.spawn);
-    const target = this._enemyTargetTile();
+    // ONE Flow for the whole Wave, shared by every Enemy in it (docs/adr/0003, 0011 amendment):
+    // they are one group with one plan, and each still keeps its own Run. The Scenario's builders
+    // are pure, so the destinations they need are resolved from live world state here and handed
+    // in — the Deposit field that exists *now*, the staging Tile for *this* spawn edge.
+    const flowName = wave.flow || 'rush';
+    const plan = getEnemyFlow(flowName);
+    const model = enemyFlowModel(flowName, {
+      base: this._enemyTargetTile(),
+      economy: this._enemyEconomyTile(),
+      flank: this._enemyFlankTile(wave.spawn),
+    });
+    const flowId = `enemy_${flowName}_${++this._enemySeq}`;
+    this._enemyFlows.set(flowId, model);
+    this._log(`Wave: ${wave.count} ${getUnitType(wave.unitType)?.label || wave.unitType} ` +
+              `${plan.label} from the ${COMPASS[wave.spawn] || wave.spawn}`);
     for (let i = 0; i < wave.count; i++) {
       // Fan the group out around the spawn origin so they don't all stack on one Tile.
       const spot = this._freeWalkableNear(origin.x + ((i % 3) - 1) * 2, origin.y + (((i / 3) | 0) - 1) * 2);
-      if (spot) this._spawnEnemy(wave.unitType, spot, target);
+      if (spot) this._spawnEnemy(wave.unitType, spot, flowId);
     }
   }
 
-  // Spawn one Enemy Unit running a data-authored rush Flow (kept out of the Library, ADR-0011).
-  _spawnEnemy(typeId, spot, target) {
+  // Spawn one Enemy Unit born running its Wave's data-authored Flow (kept out of the Library,
+  // ADR-0011) — the same born-with-a-Flow mechanism Train uses (docs/adr/0013).
+  _spawnEnemy(typeId, spot, flowId) {
     const unit = this._createUnit(typeId, spot.x, spot.y, FACTION.ENEMY);
     if (!unit) return;
-    const id = `enemy_${++this._enemySeq}`;
-    const model = enemyFlowModel(target);
-    this._enemyFlows.set(id, model);
-    unit.assignedFlowId = id;
-    unit.run = startRun(id, model);
+    const model = this._enemyFlows.get(flowId);
+    if (!model) return;
+    unit.assignedFlowId = flowId;
+    unit.run = startRun(flowId, model);
     if (unit._ui) unit._ui.nameEl.style.color = '#ff6b6b';
     this._refreshUnitLabel(unit);
+  }
+
+  // Where a Raid goes (src/scenario.js ENEMY_FLOWS.raid): beside the Deposit cluster the player is
+  // most likely to be working — the gatherable field nearest the Command Center, since that is
+  // where Workers get rallied. Biopulp is skipped: those are corpses scattered by the fighting, so
+  // chasing them would send Raids at the battlefield rather than at the economy. null once nothing
+  // is left to raid, and the Flow falls back to the base.
+  _enemyEconomyTile() {
+    const cc = this._commandCenter;
+    if (!cc || !this._deposits.length) return null;
+    const cx = cc.tx + cc.tileW * 0.5, cy = cc.ty + cc.tileH * 0.5;
+    let best = null, bestD = Infinity;
+    for (const dep of this._deposits) {
+      if (dep.type === 'biopulp') continue;
+      const d = (dep.tx - cx) ** 2 + (dep.ty - cy) ** 2;
+      if (d < bestD) { bestD = d; best = dep; }
+    }
+    return best ? this._freeWalkableNear(best.tx, best.ty) : null;
+  }
+
+  // Where a Flank stages before attacking in (src/scenario.js ENEMY_FLOWS.flank): halfway in from
+  // the edge a quarter-turn around the base from where the Wave spawned. Halfway rather than the
+  // edge itself keeps the detour a credible staging move instead of a march across the whole map,
+  // while still putting the group plainly somewhere other than the briefing's spawn edge.
+  _enemyFlankTile(spawnName) {
+    const edge = this._spawnPoint(FLANK_FROM[spawnName] || 'top');
+    const cc = this._commandCenter;
+    if (!cc) return edge;
+    const bx = cc.tx + (cc.tileW >> 1), by = cc.ty + (cc.tileH >> 1);
+    return this._freeWalkableNear(Math.round((edge.x + bx) / 2), Math.round((edge.y + by) / 2)) || edge;
   }
 
   // Map a named spawn point to an edge Tile, snapped to the nearest walkable Tile.
@@ -2320,7 +2367,9 @@ void main(void){
     setText(this._waveEls.eta, allOut ? 'clear the field' : `in ${clock(Math.max(0, w.at - st.time))}`);
     setText(this._waveEls.next, allOut
       ? 'No further Waves — destroy what is left to win'
-      : `${w.count} × ${getUnitType(w.unitType)?.label || w.unitType}  ·  from the ${COMPASS[w.spawn] || w.spawn}`);
+      : `${w.count} × ${getUnitType(w.unitType)?.label || w.unitType}  ·  ` +
+        `${getEnemyFlow(w.flow).label} from the ${COMPASS[w.spawn] || w.spawn}`);
+    this._waveEls.next.title = allOut ? '' : getEnemyFlow(w.flow).describe;
 
     if (this._waveListNext !== st.next) {
       this._waveListNext = st.next;
@@ -2347,7 +2396,14 @@ void main(void){
       const dir = document.createElement('span');
       dir.className = 'wave-dir';
       dir.textContent = COMPASS[wave.spawn] || wave.spawn;
-      row.append(at, what, dir);
+      // The Flow this Wave runs, colour-coded: a glance down the briefing should show *what kind*
+      // of trouble is coming, not just how much of it (docs/adr/0011 amendment).
+      const plan = getEnemyFlow(wave.flow);
+      const tag = document.createElement('span');
+      tag.className = `wave-plan plan-${plan.id}`;
+      tag.textContent = plan.label;
+      row.title = plan.describe;
+      row.append(at, what, dir, tag);
       list.appendChild(row);
     });
     // Keep the next Wave in view as the Scenario walks down a timeline taller than the panel.
