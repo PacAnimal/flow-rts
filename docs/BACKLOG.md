@@ -174,5 +174,5 @@ enforce it). A Walkable Tile in an enclosed pocket still fails the old silent wa
 | Enemy Flows per Wave: rush / raid / flank / infiltrate (ADR-0011 amendment) | `903abfe` |
 | Starter Flows seeded into the Library; ×8 / ×16 speed with a clamped substep | `d9acdf9` |
 | Markers: named, draggable destinations that are also Runners; player Move / Attack-Move require one (ADR-0024) | `08c66fb` |
-| Call Flow: run a same-kind Flow in its own Frame and return; recursion refused (ADR-0025) | *uncommitted* |
-| Repeat: counted loop with `in` / **Next** inputs, count kept per Frame (ADR-0026) | *uncommitted* |
+| Call Flow: run a same-kind Flow in its own Frame and return; recursion refused (ADR-0025) | `a670916` |
+| Repeat: counted loop with `in` / **Next** inputs, count kept per Frame (ADR-0026) | `a670916` |
