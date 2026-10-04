@@ -352,6 +352,48 @@ export const NODE_KINDS = {
     ],
   },
 
+  Repeat: {
+    kind: 'Repeat',
+    category: 'control',
+    runner: 'any',
+    title: 'Repeat',
+    // A counted loop (docs/adr/0026). Wire `Repeat` into the body and the body's end back into
+    // `Next`: the cursor goes round `count` times, then leaves by `Done`. Entering by the plain
+    // input starts the count afresh; only `Next` counts another pass — so a body that broke out
+    // early through a Branch and comes round again later starts clean. Instant — it only counts —
+    // so an all-instant body runs every pass in one tick. Unset/0 ⇒ straight to Done (ADR-0004).
+    ports: [
+      { id: 'in', dir: 'in', type: 'exec', label: '' },
+      { id: 'next', dir: 'in', type: 'exec', label: 'Next' },
+      { id: 'loop', dir: 'out', type: 'exec', label: 'Repeat' },
+      { id: 'done', dir: 'out', type: 'exec', label: 'Done' },
+    ],
+    params: [
+      { id: 'count', type: 'number', label: 'Times', min: 0, max: 100, step: 1 },
+    ],
+  },
+
+  CallFlow: {
+    kind: 'CallFlow',
+    category: 'control',
+    runner: 'any',
+    title: 'Call Flow',
+    // Run another Library Flow from its On Start, then carry on from here once its chain ends
+    // (docs/adr/0025) — a reusable behaviour ("gather cycle", "fall back and regroup") written once
+    // and used from many Flows. The called Flow runs on this same Runner, in a Frame of its own
+    // pushed on the Run's stack, so Interrupts still preempt it and resume it. Only a Flow of the
+    // same Runner kind (and building type) can be called, and never one already running beneath —
+    // a Flow cannot call itself, directly or through another. Its own Interrupts are not armed:
+    // the assigned Flow's are. Unset ⇒ no-op (ADR-0004).
+    ports: [
+      { id: 'in', dir: 'in', type: 'exec', label: '' },
+      { id: 'out', dir: 'out', type: 'exec', label: '' },
+    ],
+    params: [
+      { id: 'flow', type: 'callFlowRef', label: 'Flow' },
+    ],
+  },
+
   RoamAttack: {
     kind: 'RoamAttack',
     category: 'action',

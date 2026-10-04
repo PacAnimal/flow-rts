@@ -75,11 +75,13 @@ a Flow starts a fresh Run; re-assigning discards the old one. A Run is per-Runne
 _Avoid_: process, thread, session, instance
 
 **Frame**:
-One cursor position within a Run's stack: the id of the Node it sits on plus that Node's
-in-progress scratch state. The **base Frame** is the bottom of the stack — the OnStart line, the
-Runner's main behaviour. An Interrupt firing pushes a handler Frame above it; when that handler's
-chain ends, its Frame is **popped** and the Frame beneath **resumes** exactly where it was
-(freeze-and-continue: its scratch state is untouched while suspended). Only the top Frame advances.
+One cursor position within a Run's stack: the Flow it is walking, the id of the Node it sits on,
+that Node's in-progress scratch state, and the counts of any Repeat it is going round. The
+**base Frame** is the bottom of the stack — the OnStart line, the Runner's main behaviour. An
+Interrupt firing pushes a handler Frame above it, and a Call Flow pushes a Frame walking the
+called Flow; when that Frame's chain ends, it is **popped** and the Frame beneath **resumes**
+exactly where it was (freeze-and-continue: its scratch state is untouched while suspended). Only
+the top Frame advances.
 _Avoid_: thread, coroutine, stack entry, level
 
 **Node**:
@@ -110,12 +112,32 @@ _Avoid_: command, task, operation
 
 **Flow Control**:
 A node kind that directs execution between other nodes (e.g. branch, delay), or acts on the
-Flow system itself. Wait (holds execution for a duration) and Branch (routes to one of two
-outputs by a Condition) exist. A **loop** is not a node: it is a Connection wired *backward*
-to an earlier Node, gated by a Branch and paced by a Wait (an all-instant back-edge with no
-waiting Node spins and ends the Run, so a loop must contain one). Assigning a Flow to another
+Flow system itself. Wait (holds execution for a duration), Branch (routes to one of two
+outputs by a Condition), Repeat (counts a loop) and Call Flow (runs another Flow) exist. A
+**loop** is not a node: it is a Connection wired *backward* to an earlier Node, gated by a Branch
+or counted by a Repeat, and paced by a Wait (an uncounted all-instant back-edge with no waiting
+Node spins and ends the Run, so such a loop must contain one). Assigning a Flow to another
 Runner is, for now, a capability of the Train Action rather than its own node.
 _Avoid_: logic node, control node
+
+**Repeat**:
+A Flow Control node that counts a loop: its **Repeat** output leads into the loop's body, whose
+end is wired back into Repeat's **Next** input, and after the chosen number of passes it leaves by
+**Done**. Entering by its plain input starts the count afresh; only Next counts another pass, so a
+loop left early and come back to later starts clean. Instant — it only counts — so a loop whose
+body never waits runs every pass at once. At most 100 passes.
+_Avoid_: for, loop (a loop is the back-edge itself), iterate, counter
+
+**Call Flow**:
+A Flow Control node that runs another Flow from its OnStart on the same Runner, then continues
+from where it was once that Flow's chain ends — so a behaviour written once (a gather cycle, a
+fall-back-and-regroup) can be used from many Flows. The called Flow runs in a Frame of its own, so
+an Interrupt can preempt it and it resumes like any Frame; only the assigned Flow's Interrupts fire,
+never the called Flow's. A Flow can only call one of the same Runner kind (and building type), and
+never one it is already running inside — a Flow cannot call itself, directly or through another;
+such a Call waits and says so. The called Flow is the live shared definition, so editing it changes
+every Flow that calls it.
+_Avoid_: function, macro, include, nested Flow, sub-Flow
 
 **Branch**:
 A Flow Control node that evaluates a Condition and sends execution down one of two Exec outputs,

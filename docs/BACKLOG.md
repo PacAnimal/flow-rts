@@ -43,24 +43,16 @@ consequences. Signals are invisible today, which makes the coordination system h
 covers unset required Parameters and unreachable nodes but not this. Port the cycle walk from
 `check_starters` over: for each cycle, if every node kind is instant (`Branch`, `SetSignal`,
 `Build`, Events), flag it. It is the single most likely authoring mistake and it is detectable.
+(Note: no `check_starters` exists in the repo today — the walk has to be written. And a cycle that
+returns through a Repeat's **Next** input is bounded, not a spin — ADR-0026; `Repeat` and
+`CallFlow` are both instant on the way in.)
 
 ---
 
 ## Flow language
 
-### Call Flow — a Flow as a subroutine · **M** · needs an ADR
-A node that runs another Flow and returns. The machinery already exists: ADR-0019's Frame stack is
-exactly a call stack, `pushHandler` is the push, and `flowRef` is an existing Parameter type
-(`Train` uses it). Needs a recursion guard against `MAX_STACK_DEPTH`. This is the highest-value
-language addition available and far cheaper than it looks — it lets a player build reusable
-behaviours ("gather cycle", "survival reflex") and compose them, which is the natural next step
-after Categories organised the Library.
-
-### Counted Repeat · **M** · needs an ADR
-`Repeat N times`. The Frame scratch resets on node re-entry, so the count needs to live beside
-`run.timers` (keyed by node id) rather than in `run.state` — `timers` is the existing precedent for
-per-node state that survives re-entry. ADR-0014 named the absence of counted loops as the reason
-Waves are data rather than a spawner Flow, so landing this reopens that "purist" option.
+*Call Flow (ADR-0025) and Repeat (ADR-0026) shipped — see Done. Their follow-ups are under
+"Found while working".*
 
 ---
 
@@ -151,6 +143,21 @@ enforce it). A Walkable Tile in an enclosed pocket still fails the old silent wa
 - **Unvalidated:** the Markers panel at narrow widths, and whether it collides with the wave
   briefing on short windows.
 
+### Call Flow / Repeat follow-ups (ADR-0025, 0026)
+- **No starter teaches either.** The obvious one is splitting the economy starter into a
+  "Gather cycle" Flow that two others call. Adding starters means bumping `SEED_VERSION` in
+  `templates.js`, which re-seeds for every existing player — decide whether that is wanted.
+- **Interrupts in a called Flow are silently inert.** The palette still offers OnTimer / OnDamaged
+  etc. in any Flow, and nothing tells the author they will not fire when the Flow is *called*
+  (only when it is assigned). A diagnostic needs to know whether a Flow is ever called, which is a
+  Library-wide question the per-Flow `_diagnostics()` does not ask today.
+- **A deleted Flow leaves Call Flow nodes pointing nowhere** — flagged on the node, never cleaned
+  up, the same as Train's `assignFlow`. A Library-wide "used by" view would cover both.
+- **The inspector swaps Flows as the cursor goes in and out of calls.** Intended (ADR-0025), but a
+  tight `Call A → Call B` loop with instant bodies could flicker it. Not seen; not played.
+- **Unvalidated:** the two-input Repeat node's layout (two labelled inputs is new to the editor),
+  and whether players find **Next** without reading anything.
+
 ### Unvalidated by anyone who has played it
 - The Wave mix across the four Enemy Flows (three raids, two infiltrations) changes the Scenario's
   difficulty and was never played, only reasoned about.
@@ -167,3 +174,5 @@ enforce it). A Walkable Tile in an enclosed pocket still fails the old silent wa
 | Enemy Flows per Wave: rush / raid / flank / infiltrate (ADR-0011 amendment) | `903abfe` |
 | Starter Flows seeded into the Library; ×8 / ×16 speed with a clamped substep | `d9acdf9` |
 | Markers: named, draggable destinations that are also Runners; player Move / Attack-Move require one (ADR-0024) | `08c66fb` |
+| Call Flow: run a same-kind Flow in its own Frame and return; recursion refused (ADR-0025) | *uncommitted* |
+| Repeat: counted loop with `in` / **Next** inputs, count kept per Frame (ADR-0026) | *uncommitted* |

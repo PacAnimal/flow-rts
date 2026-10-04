@@ -38,7 +38,7 @@ is shaped the way it is. Consult them before non-trivial changes:
   precise meaning and a list of words to *avoid*. Use the exact vocabulary (Flow, Runner, Run,
   Node, Exec/Data port, Parameter, Deposit, Cargo, Stockpile, Scenario, Wave, Objective, …). Do not
   call a Flow a "graph" or a Deposit a "resource node". This matters for both code and comments.
-- **`docs/adr/`** — 24 Architecture Decision Records (numbered `0001`–`0024`). Code comments cite
+- **`docs/adr/`** — 26 Architecture Decision Records (numbered `0001`–`0026`). Code comments cite
   them constantly (e.g. `docs/adr/0006`). When you touch a subsystem, the relevant ADR explains the
   constraint you must preserve. Adding a significant architectural decision means writing a new ADR.
 

@@ -323,6 +323,10 @@ export class MapScene extends Phaser.Scene {
         return m ? { x: m.tx, y: m.ty } : null;
       },
       relocateMarker: (marker, dest) => this._relocateMarker(marker, dest),
+      // Call Flow (docs/adr/0025): the interpreter resolves a called Flow's live model by id, the
+      // same lookup the Run's own Flow uses, and names it in a refusal reason.
+      resolveFlow: (flowId) => this._resolveFlow(flowId),
+      flowName: (flowId) => flowLibrary.get(flowId)?.name || null,
       suspendRunner: (runner) => {
         if (runner.mv) this._movement.stop(runner);
         if (runner.combat) runner.combat = null;
@@ -457,7 +461,8 @@ export class MapScene extends Phaser.Scene {
     const prevNode = run.current;
     tickRun(run, runner, model, this._world, delta);
     if (run.current !== prevNode && run.current) {
-      const node = model.getNode(run.current);
+      // The cursor may now be inside a called Flow (docs/adr/0025).
+      const node = this._resolveFlow(run.frameFlowId)?.getNode(run.current);
       if (node && node.kind !== 'OnStart') this._log(`${runner.label} ▶ ${this._nodeDesc(node)}`);
     }
     if (run.status === 'idle') this._log(`${runner.label} flow complete`);
@@ -2123,6 +2128,11 @@ void main(void){
     if (node.kind === 'Train') return p?.type ? `Train ${p.type}` : 'Train';
     if (node.kind === 'Research') return p?.upgradeType ? `Research ${getUpgrade(p.upgradeType)?.label || p.upgradeType}` : 'Research';
     if (node.kind === 'Build') return p?.buildingType ? `Build ${p.buildingType}` : 'Build';
+    if (node.kind === 'CallFlow') {
+      const name = p?.flow ? flowLibrary.get(p.flow)?.name : null;
+      return name ? `Call "${name}"` : 'Call Flow';
+    }
+    if (node.kind === 'Repeat') return p?.count ? `Repeat ×${p.count}` : 'Repeat';
     return node.kind;
   }
 
@@ -2228,7 +2238,7 @@ void main(void){
   _inspectRunner(runner) {
     const editor = this._editor();
     if (!editor) return;
-    const flowId = runner.run?.flowId ?? runner.assignedFlowId ?? null;
+    const flowId = this._inspectedFlowId(runner);
     const model = this._resolveFlow(flowId);
     if (!model) return; // no Flow to show (unassigned) — leave the current selection/panel as-is
     this._selectedRunner = runner;
@@ -2247,18 +2257,29 @@ void main(void){
   }
 
   _inspectTitle(runner) {
-    if (runner.isMarker) return `Marker “${runner.name}”`;
-    return `${runner.label || 'Runner'}  ·  ${runner.faction}`;
+    const who = runner.isMarker
+      ? `Marker “${runner.name}”` : `${runner.label || 'Runner'}  ·  ${runner.faction}`;
+    // Inside a called Flow the panel shows that Flow, so say which it is (docs/adr/0025).
+    const run = runner.run;
+    if (!run || run.frameFlowId === run.flowId) return who;
+    return `${who}  ›  in “${flowLibrary.get(run.frameFlowId)?.name || 'a called Flow'}”`;
+  }
+
+  // The Flow the inspector shows: the one the Run's cursor is walking — inside a Call Flow, the
+  // called Flow rather than the assigned one (docs/adr/0025) — else the Assignment.
+  _inspectedFlowId(runner) {
+    return runner.run?.frameFlowId ?? runner.run?.flowId ?? runner.assignedFlowId ?? null;
   }
 
   // Per-frame: keep the editor's highlight on the inspected Runner's current node, swapping the
-  // shown Flow if its Assignment changed (e.g. a re-assign restarted the Run on a new Flow).
+  // shown Flow when the cursor's Flow changes — a re-assign restarted the Run on a new Flow, or the
+  // cursor stepped into or back out of a called Flow (docs/adr/0025).
   _syncInspector() {
     if (!this._selectedRunner) return;
     const editor = this._editor();
     if (!editor) return;
     const r = this._selectedRunner;
-    const flowId = r.run?.flowId ?? r.assignedFlowId ?? null;
+    const flowId = this._inspectedFlowId(r);
     if (flowId !== this._inspectFlowId) {
       this._inspectFlowId = flowId;
       const model = this._resolveFlow(flowId);
@@ -2284,7 +2305,7 @@ void main(void){
     // Armed but no active Frame: the base line ended and the Run is waiting to service its next
     // Interrupt (docs/adr/0019). Still 'running', just nothing on the cursor right now.
     if (run.current == null) return 'waiting for an interrupt';
-    const node = this._resolveFlow(run.flowId)?.getNode(run.current);
+    const node = this._resolveFlow(run.frameFlowId)?.getNode(run.current);
     if (!node) return run.status;
     let title;
     try { title = getNodeKind(node.kind).title; } catch { title = node.kind; }
@@ -2543,7 +2564,7 @@ void main(void){
     let frac = -1, color = 0x46e08a;
     const run = unit.run;
     if (run && run.status === 'running') {
-      const node = this._resolveFlow(run.flowId)?.getNode(run.current);
+      const node = this._resolveFlow(run.frameFlowId)?.getNode(run.current);
       const st = run.state;
       if (node && st && st.duration > 0) {
         if (node.kind === 'Gather') { frac = st.elapsed / st.duration; color = 0x46e08a; }
@@ -2570,7 +2591,7 @@ void main(void){
     let frac = -1;
     const run = building.run;
     if (run && run.status === 'running') {
-      const node = this._resolveFlow(run.flowId)?.getNode(run.current);
+      const node = this._resolveFlow(run.frameFlowId)?.getNode(run.current);
       const st = run.state;
       // Train and Research share the same scratch shape (started/elapsed/duration), so one bar
       // covers both Building-scoped timed Actions (docs/adr/0013, 0021).

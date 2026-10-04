@@ -6,8 +6,10 @@
 //
 // A Run is a STACK of Frames (docs/adr/0019). The active (top) Frame lives directly on the Run as
 // `{ current, state }` — `current` is the id of the node the cursor sits on, `state` its scratch —
-// so the rest of the app reads the running cursor exactly as it always has. Suspended Frames
-// beneath it live in `run.stack` (each `{ current, state, interrupt }`, bottom-first), and
+// so the rest of the app reads the running cursor exactly as it always has. The active Frame also
+// carries `frameFlowId` (the Flow it is walking: the assigned Flow, or one a Call Flow node entered,
+// docs/adr/0025) and `counts` (its Repeat counters, docs/adr/0026). Suspended Frames beneath it
+// live in `run.stack` (each `{ current, state, interrupt, flowId, counts }`, bottom-first), and
 // `run.timers` holds a per-Interrupt clock keyed by node id, and `run.reason` is the active
 // Frame's parked-for reason (docs/adr/0023), refreshed every tick the cursor stays put and cleared
 // the moment it moves. `status` is 'running' | 'idle' |
@@ -32,6 +34,17 @@
 const RUNNING = { status: 'running', reason: '' };
 const running = (reason) => (reason ? { status: 'running', reason } : RUNNING);
 const done = (out = 'out') => ({ status: 'done', out });
+// A third result, returned only by Call Flow (docs/adr/0025): push a Frame running `flowId` from
+// its OnStart. tickRun owns the push and its refusals (recursion, depth, a vanished Flow), because
+// they read the Run's stack, which an executor never sees.
+const call = (flowId) => ({ status: 'call', flowId });
+
+// Most passes one Repeat may make (docs/adr/0026). A counted loop is finite by construction, so an
+// all-instant body is legitimate and tickRun lets its passes extend the `maxSteps` spin budget —
+// up to MAX_REPEAT_PASSES in one tick, past which an all-instant cycle that keeps re-entering
+// Repeats (an uncounted loop around a counted one) still spins out and ends the Run.
+export const MAX_REPEAT = 100;
+const MAX_REPEAT_PASSES = 1000;
 
 // Where a Move / Attack-Move is headed (docs/adr/0024). A player Flow names a Marker, resolved
 // through the world on every tick so a dragged (or Flow-moved) Marker re-routes everyone already on
@@ -235,6 +248,30 @@ const EXECUTORS = {
   // Evaluate the node's Condition and route to the 'yes' or 'no' Exec output (docs/adr/0010).
   // Instant; the world owns evaluation. An unset/false Condition routes 'no'.
   Branch: (node, runner, world) => done(world.test(runner, node.params || {}) ? 'yes' : 'no'),
+
+  // Run another Flow as a subroutine, then continue (docs/adr/0025). The first visit asks tickRun
+  // to push a Frame for the called Flow, which notes the call in this node's scratch; the called
+  // Flow's chain ending pops that Frame, freeze-and-continue lands the cursor back here with the
+  // note intact, and this second visit completes. An unset Flow is a no-op (ADR-0004).
+  CallFlow: (node, runner, world, dt, state) => {
+    if (state.calling) return done(); // the called Flow returned
+    const flowId = node.params?.flow;
+    return flowId ? call(flowId) : done();
+  },
+
+  // A counted loop (docs/adr/0026). Arriving by `in` starts the count afresh; arriving by `next` —
+  // the back-edge from the end of the body — counts one more pass. After `count` passes it leaves
+  // by `done` and forgets the count. Which input was used is the whole of the loop's identity, so
+  // a body that broke out early through a Branch and later comes round to `in` again starts clean
+  // rather than inheriting a stale count. The counter lives in the Frame's `counts`, since the node
+  // scratch is wiped on every entry. Instant. Unset/0 ⇒ straight to `done`.
+  Repeat: (node, runner, world, dt, state, frame) => {
+    const n = Math.min(Math.floor(node.params?.count || 0), MAX_REPEAT);
+    const passes = (frame.port === 'next' ? frame.counts[node.id] || 0 : 0) + 1;
+    if (passes > n) { delete frame.counts[node.id]; return done('done'); }
+    frame.counts[node.id] = passes;
+    return done('loop');
+  },
 };
 
 // Interrupt predicates (docs/adr/0019), keyed by node kind like EXECUTORS. Each gets its own
@@ -340,15 +377,32 @@ function anyArmable(run, model) {
 // world halts the suspended Frame's in-flight movement/combat intent (docs/adr/0019): the Runner
 // goes still until the handler moves it, and resume re-asserts intent because executors re-issue it
 // every tick. With no active Frame (an armed, base-line-finished Run) there is nothing to suspend.
+// A handler Frame always walks the assigned Flow — only its Interrupts are armed (docs/adr/0025).
 function pushHandler(run, node, runner, world) {
-  if (run.current != null) {
-    run.stack.push({ current: run.current, state: run.state, interrupt: run.activeInterrupt });
-  }
+  if (run.current != null) suspendActive(run);
   world.suspendRunner?.(runner);
-  run.current = node.id;
-  run.state = {};
-  run.reason = ''; // a fresh handler Frame has not parked anywhere yet (docs/adr/0023)
+  enterFrame(run, run.flowId, node.id);
   run.activeInterrupt = node.id;
+}
+
+// Move the active Frame onto the stack, frozen exactly as it is (freeze-and-continue).
+function suspendActive(run) {
+  run.stack.push({
+    current: run.current,
+    state: run.state,
+    interrupt: run.activeInterrupt,
+    flowId: run.frameFlowId,
+    counts: run.counts,
+  });
+}
+
+// Make a fresh Frame active, on node `nodeId` of Flow `flowId`.
+function enterFrame(run, flowId, nodeId) {
+  run.current = nodeId;
+  run.state = {};
+  run.reason = ''; // a fresh Frame has not parked anywhere yet (docs/adr/0023)
+  run.frameFlowId = flowId;
+  run.counts = {};
 }
 
 // Resume the Frame beneath the active one, restoring its frozen cursor + scratch (freeze-and-
@@ -359,7 +413,46 @@ function popFrame(run) {
   run.current = f.current;
   run.state = f.state;
   run.activeInterrupt = f.interrupt;
+  run.frameFlowId = f.flowId;
+  run.counts = f.counts;
   return true;
+}
+
+// The Flows the active Frame is nested inside by calls (docs/adr/0025): its own, then each Frame
+// beneath that is parked on a Call Flow waiting for the one above, stopping at the first Frame that
+// was suspended by an Interrupt instead. Calling any of these again would recurse without end, so
+// Call Flow refuses. A handler calling a Flow that the Frame it interrupted happens to be inside is
+// not recursion — the chain breaks at the Interrupt — and is allowed.
+function callChain(run) {
+  const chain = new Set([run.frameFlowId]);
+  for (let i = run.stack.length - 1; i >= 0 && run.stack[i].state.calling; i--) {
+    chain.add(run.stack[i].flowId);
+  }
+  return chain;
+}
+
+// Act on a Call Flow's request (docs/adr/0025). Returns a RUNNING result when the call is refused
+// for a reason the player can fix — recursion, or a stack too deep — and DONE when there is nothing
+// to run (the Flow was deleted, or has no OnStart), so the caller simply carries on. Otherwise
+// marks the caller as calling, suspends it, makes the called Flow's OnStart the active Frame and
+// returns null. The called Frame inherits the caller's `activeInterrupt`, so a handler's clock
+// stays paused for as long as anything it called is still running.
+function enterCall(run, flowId, world) {
+  const model = world.resolveFlow?.(flowId);
+  if (!model) return done();
+  if (callChain(run).has(flowId)) {
+    const name = world.flowName?.(flowId) || 'that Flow';
+    return running(`"${name}" is already running here — a Flow cannot call itself`);
+  }
+  if (run.stack.length >= MAX_STACK_DEPTH) return running('too deep to call another Flow');
+  const onStart = model.nodes.find((n) => n.kind === 'OnStart');
+  if (!onStart) return done();
+  run.state.calling = flowId;
+  const interrupt = run.activeInterrupt;
+  suspendActive(run);
+  enterFrame(run, flowId, onStart.id);
+  run.activeInterrupt = interrupt;
+  return null;
 }
 
 // Advance every Interrupt's clock and push a handler Frame for each that comes due, in model order
@@ -390,6 +483,8 @@ function endActive(run, model, byDeletion) {
   run.state = {};
   run.reason = '';
   run.activeInterrupt = null;
+  run.frameFlowId = run.flowId;
+  run.counts = {};
   if (anyArmable(run, model)) run.status = 'running';
   else run.status = byDeletion ? 'halted' : 'idle';
 }
@@ -408,6 +503,8 @@ export function startRun(flowId, model) {
     stack: [],
     timers: {},
     activeInterrupt: null,
+    frameFlowId: flowId,
+    counts: {},
   };
   if (!onStart && !anyArmable(run, model)) run.status = 'idle';
   return run;
@@ -419,38 +516,58 @@ export function startRun(flowId, model) {
 // reaching a node with nothing wired ends the active Frame,
 // popping to the suspended Frame beneath (resume) or ending the Run; a deleted active node discards
 // its Frame the same way. `maxSteps` guards an instant-only cycle from spinning forever in a tick.
+//
+// `model` is the Run's assigned Flow, the one whose Interrupts are armed. The active Frame may be
+// walking another Flow that a Call Flow entered (docs/adr/0025), resolved through
+// `world.resolveFlow`; a called Flow deleted from the Library mid-call is treated like a deleted
+// node — its Frame is discarded and the caller resumes past the Call.
 export function tickRun(run, runner, model, world, dt) {
   if (!run || run.status !== 'running') return run;
 
   fireDueInterrupts(run, runner, model, world, dt);
 
+  const modelOf = (flowId) => (flowId === run.flowId ? model : world.resolveFlow?.(flowId) || null);
   let steps = 0;
+  let passes = 0;  // Repeat passes this tick (docs/adr/0026)
+  let port = null; // the input port the cursor just entered by — Repeat reads it (docs/adr/0026)
   const maxSteps = model.nodes.length + run.stack.length + 2;
+  let budget = maxSteps;
   while (run.status === 'running' && run.current != null) {
-    const node = model.getNode(run.current);
+    const frameModel = modelOf(run.frameFlowId);
+    const node = frameModel?.getNode(run.current);
     if (!node) {                            // active node vanished under a live edit (ADR-0005)
+      port = null;
       if (!popFrame(run)) { endActive(run, model, true); break; }
       continue;                             // resume the Frame beneath and keep stepping
     }
 
     const exec = EXECUTORS[node.kind] || done; // unknown/effectless kind: pass through
-    const res = exec(node, runner, world, dt, run.state);
+    let res = exec(node, runner, world, dt, run.state, { port, counts: run.counts });
+    if (res.status === 'call') {
+      res = enterCall(run, res.flowId, world);
+      if (!res) { port = null; continue; }  // the called Flow's Frame is active — step it now
+    }
     if (res.status === 'running') {         // park the cursor; resume next frame
       run.reason = res.reason || '';        // why it is parked, for the inspector (docs/adr/0023)
       break;
     }
 
-    const conn = model.connections.find(
+    const conn = frameModel.connections.find(
       (c) => c.from.node === node.id && c.from.port === res.out,
     );
     if (!conn) {                            // end of this Frame's chain
+      port = null;
       if (!popFrame(run)) { endActive(run, model, false); break; }
       continue;                             // resumed Frame continues this tick
     }
+    port = conn.to.port;
     run.current = conn.to.node;
     run.state = {};  // fresh scratch for the node just entered
     run.reason = ''; // and no reason until that node parks (docs/adr/0023)
-    if (++steps > maxSteps) { run.status = 'idle'; break; }
+    // A counted loop is finite, so each Repeat pass earns the budget one more trip round its body
+    // (docs/adr/0026); only an uncounted spin — or Repeats re-entered by one — exhausts it.
+    if (node.kind === 'Repeat' && res.out === 'loop' && ++passes <= MAX_REPEAT_PASSES) budget += maxSteps;
+    if (++steps > budget) { run.status = 'idle'; break; }
   }
   return run;
 }

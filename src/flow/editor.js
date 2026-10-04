@@ -910,6 +910,8 @@ export class FlowEditor {
         buildableBuildings().map((b) => ({ value: b.id, label: b.label })));
     if (param.type === 'buildingFlowRef')
       return this._selectParam(node, param, this._buildingFlowOptions(node));
+    if (param.type === 'callFlowRef')
+      return this._selectParam(node, param, this._callableFlowOptions());
     if (param.type === 'signalName') return this._nameParam(node, param, this._signalNames());
     if (param.type === 'markerName') return this._nameParam(node, param, this.library.markerNames());
     if (param.type === 'boolean') return this._booleanParam(node, param);
@@ -999,6 +1001,18 @@ export class FlowEditor {
     if (!bt) return [];
     return this.library.list()
       .filter((e) => e.model.targetKind === 'building' && e.model.buildingType === bt)
+      .map((e) => ({ value: e.id, label: e.name }));
+  }
+
+  // Library Flows a Call Flow node may run (docs/adr/0025): the same Runner kind as the edited Flow
+  // (and, for a Building-Flow, the same building type), since the called Flow's Actions run on this
+  // Flow's Runner — a Unit cannot Train. The edited Flow itself is left out: calling yourself is
+  // refused at run time. A longer cycle (A calls B calls A) is refused there too, with a reason.
+  _callableFlowOptions() {
+    const kind = this.model.targetKind || 'unit';
+    return this.library.list()
+      .filter((e) => e.id !== this.currentId && (e.model.targetKind || 'unit') === kind)
+      .filter((e) => kind !== 'building' || e.model.buildingType === this.model.buildingType)
       .map((e) => ({ value: e.id, label: e.name }));
   }
 
@@ -1203,6 +1217,23 @@ export class FlowEditor {
         if (!n.params || n.params[pid] == null) {
           const label = getParams(n.kind).find((p) => p.id === pid)?.label || pid;
           issues.push(`Set “${label}”.`);
+        }
+      }
+      // A Call Flow whose Flow is gone, or has no On Start, completes without doing anything
+      // (docs/adr/0025) — the silent no-op this pass exists to surface.
+      if (n.kind === 'CallFlow' && n.params?.flow) {
+        const called = this.library.get(n.params.flow);
+        if (!called) issues.push('The called Flow was deleted.');
+        else if (!called.model.nodes.some((c) => c.kind === 'OnStart')) {
+          issues.push(`“${called.name}” has no On Start, so calling it does nothing.`);
+        }
+      }
+      // A Repeat whose body never comes back into Next goes round once (docs/adr/0026) — most likely
+      // the back-edge was dropped on the plain input, which restarts the count every pass.
+      if (n.kind === 'Repeat') {
+        const wired = (port, dir) => this.model.connections.some((c) => c[dir].node === n.id && c[dir].port === port);
+        if (wired('loop', 'from') && !wired('next', 'to')) {
+          issues.push('Wire the end of the loop back into “Next” — into the plain input it restarts the count.');
         }
       }
       if (!isEvent(n.kind) && !reachable.has(n.id)) {
@@ -1475,6 +1506,8 @@ const REQUIRED_PARAMS = {
   Research: ['upgradeType'],
   Build: ['buildingType', 'destination'],
   Branch: ['condition'],
+  Repeat: ['count'],
+  CallFlow: ['flow'],
 };
 
 // Grid step for snap-to-grid, aligned with the canvas's 22px dot-grid background.
