@@ -166,4 +166,4 @@ enforce it). A Walkable Tile in an enclosed pocket still fails the old silent wa
 | Wave briefing (ADR-0014 amendment) + Run reasons (ADR-0023) | `0f07712` |
 | Enemy Flows per Wave: rush / raid / flank / infiltrate (ADR-0011 amendment) | `903abfe` |
 | Starter Flows seeded into the Library; ×8 / ×16 speed with a clamped substep | `d9acdf9` |
-| Markers: named, draggable destinations that are also Runners; player Move / Attack-Move require one (ADR-0024) | *working tree* |
+| Markers: named, draggable destinations that are also Runners; player Move / Attack-Move require one (ADR-0024) | `08c66fb` |
