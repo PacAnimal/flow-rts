@@ -38,7 +38,7 @@ is shaped the way it is. Consult them before non-trivial changes:
   precise meaning and a list of words to *avoid*. Use the exact vocabulary (Flow, Runner, Run,
   Node, Exec/Data port, Parameter, Deposit, Cargo, Stockpile, Scenario, Wave, Objective, …). Do not
   call a Flow a "graph" or a Deposit a "resource node". This matters for both code and comments.
-- **`docs/adr/`** — 15 Architecture Decision Records (numbered `0001`–`0015`). Code comments cite
+- **`docs/adr/`** — 22 Architecture Decision Records (numbered `0001`–`0022`). Code comments cite
   them constantly (e.g. `docs/adr/0006`). When you touch a subsystem, the relevant ADR explains the
   constraint you must preserve. Adding a significant architectural decision means writing a new ADR.
 
@@ -80,7 +80,7 @@ This keeps `runtime.js`, `movement.js`, `combat.js`, `pathfinding.js`, `units.js
 
 ### The world (Phaser side)
 
-- **`src/scenes/MapScene.js`** — the large (~1400 lines) orchestrator and the *only* Phaser-aware
+- **`src/scenes/MapScene.js`** — the large (~2500 lines) orchestrator and the *only* Phaser-aware
   game-logic file. Owns terrain generation, the procedural-ground GLSL shader, the tilemap, the
   shared **Tile-occupancy layer** (`_occupied`, ADR-0009), deposits/crystals, decorations, the
   per-frame `update()` loop (tick every Runner's Run → resolve combat → integrate movement → advance
@@ -94,6 +94,11 @@ This keeps `runtime.js`, `movement.js`, `combat.js`, `pathfinding.js`, `units.js
   (`unit.combat = { mode, dest }`) set by the AttackMove/Hold executors; this system acquires
   targets, drives chase/stop into the movement system, and applies Damage via callback. Targeting is
   resolved in the world, never wired as a Data port.
+- **`src/effects.js`** — `AttackEffects`: the attack visuals, driven by MapScene's `onAttack`
+  callback. It imports Phaser, but does not break the rule above: it is a render-layer helper, not
+  game logic — `CombatSystem` decides *that* an attack lands (ADR-0012), this only shows it. A unit type may name an explicit `attackFx`; otherwise the effect
+  falls back to reach (short = melee slash, long = ranged bolt). Each effect is a self-destroying
+  tween, so there is no per-frame bookkeeping for MapScene.
 
 ### Data tables (pure, no Phaser, no game state)
 
@@ -102,10 +107,17 @@ Game numbers live in data tables, **not** as node Parameters — adding a type i
 - **`src/units.js`** — `UNIT_TYPES` / `BUILDING_TYPES` (health, damage, range, aggro, cooldown,
   cost, buildTime, carryCapacity) and `FACTION` (`player` / `enemy` / `critter`).
 - **`src/resources.js`** — `RESOURCES` (gather time, yield, deposit amount, sprites).
+- **`src/upgrades.js`** — `UPGRADES` (ADR-0021): cost, researchTime, and either `modifiers`
+  (additive stat deltas merged onto the target Unit type by MapScene's `effectiveStats` seam) or
+  `grants` (named ability flags the world reads). Each Upgrade targets exactly one Unit type; the
+  registry of which are *researched* is world state in MapScene, not here.
 - **`src/conditions.js`** — the Branch Condition catalog (metadata only; evaluation is in MapScene).
 - **`src/decorations.js`** — scatterable map scenery + footprints.
 - **`src/scenario.js`** — `SCENARIO` (the survival Waves) + builders for the data-authored Enemy and
   critter Flows that are kept *out* of the Library (ADR-0011, ADR-0014).
+- **`src/constants.js`** — the handful of shared magic numbers: `TILE` (64), `EXTRUDE`,
+  `UNIT_SPEED`, `UNIT_CARRY_CAPACITY`. Not a per-type table, but the same rule applies — a number
+  used in two places belongs here, not inlined.
 
 ### Entities
 
